@@ -9,7 +9,7 @@ repository   = "https://github.com/jqnatividad/qsv-dateparser"
 keywords     = ["date", "time", "datetime", "parser", "parse"]
 license      = "MIT"
 edition      = "2021"
-rust-version = "1.77.1"
+rust-version = "1.77.2"
 
 [dependencies]
 anyhow = "1.0"
@@ -23,7 +23,7 @@ regex = { version = "1", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-chrono-tz = "0.8"
+chrono-tz = "0.9"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
