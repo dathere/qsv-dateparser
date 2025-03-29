@@ -147,7 +147,9 @@ where
     // - 1671673426.123456789
     #[inline]
     fn unix_timestamp(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let Ok(ts_sec_val) = input.parse::<f64>() else {
+        let ts_sec_val: f64 = if let Ok(val) = fast_float2::parse(input) {
+            val
+        } else {
             return None;
         };
 
