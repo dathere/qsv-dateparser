@@ -6,13 +6,14 @@ use chrono::offset::FixedOffset;
 ///
 /// The additional `colon` may be used to parse a mandatory or optional `:` between hours and minutes,
 /// and should return a valid `FixedOffset` or `Err` when parsing fails.
+#[inline]
 pub fn parse(s: &str) -> Result<FixedOffset> {
-    let offset = if s.contains(':') {
+    FixedOffset::east_opt(if s.contains(':') {
         parse_offset_internal(s, colon_or_space, false)?
     } else {
         parse_offset_2822(s)?
-    };
-    FixedOffset::east_opt(offset).ok_or_else(|| anyhow!("input is out of range"))
+    })
+    .ok_or_else(|| anyhow!("input is out of range"))
 }
 
 #[inline]
