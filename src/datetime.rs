@@ -73,7 +73,7 @@ where
     #[inline]
     fn ymd_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-            r"^(\d{4})-(\d{2})"
+            r"^\d{4}-\d{2}"
 
         };
 
