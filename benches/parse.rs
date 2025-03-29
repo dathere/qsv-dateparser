@@ -3,6 +3,7 @@ use qsv_dateparser::parse;
 use std::sync::OnceLock;
 
 static SELECTED: OnceLock<Vec<&'static str>> = OnceLock::new();
+static LARGE_DATASET: OnceLock<Vec<&'static str>> = OnceLock::new();
 
 fn bench_parse_all(c: &mut Criterion) {
     SELECTED
@@ -29,9 +30,44 @@ fn bench_parse_all(c: &mut Criterion) {
             "171113 14:14:20",               // mysql_log_timestamp
         ])
         .unwrap();
+
+    // Generate a large dataset for throughput testing
+    LARGE_DATASET
+        .set(
+            (0..1000)
+                .map(|i| {
+                    let year = 2000 + (i % 24);
+                    let month = 1 + (i % 12);
+                    let day = 1 + (i % 28);
+                    let hour = i % 24;
+                    let minute = i % 60;
+                    let second = i % 60;
+                    format!(
+                        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                        year, month, day, hour, minute, second
+                    )
+                })
+                .map(|s| Box::leak(s.into_boxed_str()) as &'static str)
+                .collect(),
+        )
+        .unwrap();
+
     c.bench_with_input(
         BenchmarkId::new("parse_all", "accepted_formats"),
         &SELECTED.get().unwrap(),
+        |b, all| {
+            b.iter(|| {
+                for date_str in all.iter() {
+                    let _ = parse(*date_str);
+                }
+            })
+        },
+    );
+
+    // Benchmark throughput with large dataset
+    c.bench_with_input(
+        BenchmarkId::new("parse_throughput", "1000_dates"),
+        &LARGE_DATASET.get().unwrap(),
         |b, all| {
             b.iter(|| {
                 for date_str in all.iter() {
@@ -50,5 +86,24 @@ fn bench_parse_each(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_parse_all, bench_parse_each);
+// Benchmark memory usage
+fn bench_memory_usage(c: &mut Criterion) {
+    c.bench_function("memory_usage", |b| {
+        b.iter(|| {
+            let mut total = 0;
+            for date_str in SELECTED.get().unwrap().iter() {
+                let result = parse(*date_str);
+                total += std::mem::size_of_val(&result);
+            }
+            total
+        })
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_parse_all,
+    bench_parse_each,
+    bench_memory_usage
+);
 criterion_main!(benches);
