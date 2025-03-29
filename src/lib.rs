@@ -219,7 +219,6 @@ use std::sync::OnceLock;
 ///     Err(err) => println!("ERROR from parsing datetime string: {}", err)
 /// }
 /// ```
-
 pub struct DateTimeUtc(pub DateTime<Utc>);
 
 impl std::str::FromStr for DateTimeUtc {

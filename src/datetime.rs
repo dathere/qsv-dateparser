@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 use crate::timezone;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::prelude::*;
 use regex::Regex;
 
@@ -36,7 +36,7 @@ where
         }
     }
 
-    pub fn prefer_dmy(&mut self, yes: bool) -> &Self {
+    pub const fn prefer_dmy(&mut self, yes: bool) -> &Self {
         self.prefer_dmy = yes;
         self
     }
@@ -679,9 +679,11 @@ mod tests {
             )
         }
         assert!(parse.unix_timestamp("15116").is_some());
-        assert!(parse
-            .unix_timestamp("16200248727179150001620024872717915000") //DevSkim: ignore DS173237
-            .is_some());
+        assert!(
+            parse
+                .unix_timestamp("16200248727179150001620024872717915000") //DevSkim: ignore DS173237
+                .is_some()
+        );
         assert!(parse.unix_timestamp("not-a-ts").is_none());
     }
 

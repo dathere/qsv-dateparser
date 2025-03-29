@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::offset::FixedOffset;
 
 /// Tries to parse `[-+]\d\d` continued by `\d\d`. Return `FixedOffset` if possible.
@@ -88,16 +88,19 @@ where
 
     // minutes (00--59)
     // if the next two items are digits then we have to add minutes
-    let minutes = if let Ok(ds) = digits(s) {
-        match ds {
+    let minutes = match digits(s) {
+        Ok(ds) => match ds {
             (m1 @ b'0'..=b'5', m2 @ b'0'..=b'9') => i32::from((m1 - b'0') * 10 + (m2 - b'0')),
             (b'6'..=b'9', b'0'..=b'9') => return Err(anyhow!(err_out_of_range)),
             _ => return Err(anyhow!(err_invalid)),
+        },
+        _ => {
+            if allow_missing_minutes {
+                0
+            } else {
+                return Err(anyhow!(err_too_short));
+            }
         }
-    } else if allow_missing_minutes {
-        0
-    } else {
-        return Err(anyhow!(err_too_short));
     };
 
     let seconds = hours * 3600 + minutes * 60;
