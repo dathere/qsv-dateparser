@@ -73,7 +73,8 @@ where
     #[inline]
     fn ymd_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-            r"^[0-9]{4}-[0-9]{2}"
+            r"^(\d{4})-(\d{2})"
+
         };
 
         if !re.is_match(input) {
@@ -89,7 +90,7 @@ where
     #[inline]
     fn month_mdy_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-            r"^[a-zA-Z]{3,9}\.?\s+[0-9]{1,2}"
+            r"^[a-zA-Z]{3,9}\.?\s+\d{1,2}"
         };
 
         if !re.is_match(input) {
@@ -102,7 +103,7 @@ where
 
     #[inline]
     fn month_dmy_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{1,2}\s+[a-zA-Z]{3,9}"
+        let re: &Regex = regex! {r"^\d{1,2}\s+[a-zA-Z]{3,9}"
         };
 
         if !re.is_match(input) {
@@ -113,7 +114,7 @@ where
 
     #[inline]
     fn slash_mdy_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{1,2}/[0-9]{1,2}"
+        let re: &Regex = regex! {r"^\d{1,2}/\d{1,2}"
         };
         if !re.is_match(input) {
             return None;
@@ -189,7 +190,7 @@ where
     #[inline]
     fn ymd_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-                r"^[0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]{1,9})?\s*(am|pm|AM|PM)?$"
+                r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?\s*(am|pm|AM|PM)?$"
 
         };
         if !re.is_match(input) {
@@ -219,7 +220,7 @@ where
     #[inline]
     fn ymd_hms_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-                r"^[0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]{1,9})?(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
+                r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
         };
 
         if !re.is_match(input) {
@@ -247,7 +248,7 @@ where
     // - 2021-02-21
     #[inline]
     fn ymd(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        let re: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}$"
         };
 
         if !re.is_match(input) {
@@ -271,7 +272,7 @@ where
     // - 2020-07-20+08:00 (yyyy-mm-dd-07:00)
     #[inline]
     fn ymd_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
+        let re: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
         };
         if !re.is_match(input) {
             return None;
@@ -303,7 +304,7 @@ where
     // - 2021-Feb-21
     #[inline]
     fn month_ymd(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{4}-[a-zA-Z]{3,9}-[0-9]{2}$"
+        let re: &Regex = regex! {r"^\d{4}-\w{3,9}-\d{2}$"
         };
         if !re.is_match(input) {
             return None;
@@ -329,7 +330,7 @@ where
     #[inline]
     fn month_mdy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-                r"^[a-zA-Z]{3,9}\.?\s+[0-9]{1,2},\s+[0-9]{2,4},?\s+[0-9]{1,2}:[0-9]{2}(:[0-9]{2})?\s*(am|pm|AM|PM)?$"
+                r"^[a-zA-Z]{3,9}\.?\s+\d{1,2},\s+\d{2,4},?\s+\d{1,2}:\d{2}(:\d{2})?\s*(am|pm|AM|PM)?$"
         };
         if !re.is_match(input) {
             return None;
@@ -354,7 +355,7 @@ where
     #[inline]
     fn month_mdy_hms_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-                r"^[a-zA-Z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4}\s*,?(at)?\s+[0-9]{2}:[0-9]{2}(:[0-9]{2})?\s*(am|pm|AM|PM)?(?P<tz>\s+[+-:a-zA-Z0-9]{3,6})$",
+                r"^[a-zA-Z]{3,9}\s+\d{1,2},?\s+\d{4}\s*,?(at)?\s+\d{2}:\d{2}(:\d{2})?\s*(am|pm|AM|PM)?(?P<tz>\s+[+-:a-zA-Z0-9]{3,6})$",
         };
         if !re.is_match(input) {
             return None;
@@ -391,7 +392,7 @@ where
     // - October 7, 1970
     #[inline]
     fn month_mdy(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[a-zA-Z]{3,9}\.?\s+[0-9]{1,2},\s+[0-9]{2,4}$"
+        let re: &Regex = regex! {r"^[a-zA-Z]{3,9}\.?\s+\d{1,2},\s+\d{2,4}$"
         };
         if !re.is_match(input) {
             return None;
@@ -418,7 +419,7 @@ where
     #[inline]
     fn month_dmy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-                r"^[0-9]{1,2}\s+[a-zA-Z]{3,9}\s+[0-9]{2,4},?\s+[0-9]{1,2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]{1,9})?$"
+                r"^\d{1,2}\s+[a-zA-Z]{3,9}\s+\d{2,4},?\s+\d{1,2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]{1,9})?$"
         };
         if !re.is_match(input) {
             return None;
@@ -443,7 +444,7 @@ where
     // - 1 July 2013
     #[inline]
     fn month_dmy(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{1,2}\s+[a-zA-Z]{3,9}\s+[0-9]{2,4}$"
+        let re: &Regex = regex! {r"^\d{1,2}\s+[a-zA-Z]{3,9}\s+\d{2,4}$"
         };
         if !re.is_match(input) {
             return None;
@@ -478,7 +479,7 @@ where
     #[inline]
     fn slash_mdy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-                r"^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4}\s+[0-9]{1,2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]{1,9})?\s*(am|pm|AM|PM)?$"
+                r"^\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2}(:\d{2})?(\.\d{1,9})?\s*(am|pm|AM|PM)?$"
         };
         if !re.is_match(input) {
             return None;
@@ -516,7 +517,7 @@ where
     #[inline]
     fn slash_dmy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-                r"^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4}\s+[0-9]{1,2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]{1,9})?\s*(am|pm|AM|PM)?$"
+                r"^\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2}(:\d{2})?(\.\d{1,9})?\s*(am|pm|AM|PM)?$"
         };
         if !re.is_match(input) {
             return None;
@@ -545,7 +546,7 @@ where
     // - 8/1/71
     #[inline]
     fn slash_mdy(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4}$"
+        let re: &Regex = regex! {r"^\d{1,2}/\d{1,2}/\d{2,4}$"
         };
         if !re.is_match(input) {
             return None;
