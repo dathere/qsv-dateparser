@@ -233,8 +233,19 @@ static MIDNIGHT: OnceLock<chrono::NaiveTime> = OnceLock::new();
 
 /// This function tries to recognize the input datetime string with a list of accepted formats.
 /// When timezone is not provided, this function assumes it's a [`chrono::Local`] datetime. For
-/// custom timezone, use [`parse_with_timezone()`] instead.If all options are exhausted,
+/// custom timezone, use [`parse_with_timezone()`] instead. If all options are exhausted,
 /// [`parse()`] will return an error to let the caller know that no formats were matched.
+///
+/// # Timezone Behavior
+///
+/// This function uses the system's **Local** timezone for datetime strings that don't include
+/// timezone information. This means parsing results may vary across different machines or
+/// when the system timezone changes.
+///
+/// # DST Ambiguity
+///
+/// Datetime strings that fall during DST "fall back" transitions (when the same local time
+/// occurs twice) will fail to parse, as there's no way to determine which occurrence was intended.
 #[inline]
 pub fn parse(input: &str) -> Result<DateTime<Utc>> {
     Parse::new(&Local, Utc::now().time()).parse(input)
@@ -243,6 +254,13 @@ pub fn parse(input: &str) -> Result<DateTime<Utc>> {
 /// Similar to [`parse()`], this function takes a datetime string and a boolean `dmy_preference`.
 /// When `dmy_preference` is `true`, it will parse strings using the DMY format. Otherwise, it
 /// parses them using an MDY format.
+///
+/// # Timezone Behavior
+///
+/// Unlike [`parse()`], this function uses **UTC** timezone (not Local) and defaults to
+/// **midnight** (00:00:00) for date-only strings. This design choice ensures reproducible
+/// results when the DMY preference matters, avoiding Local timezone variations that could
+/// affect date interpretation near midnight.
 #[inline]
 pub fn parse_with_preference(input: &str, dmy_preference: bool) -> Result<DateTime<Utc>> {
     let midnight = MIDNIGHT.get_or_init(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
@@ -770,5 +788,38 @@ mod tests {
                 .date(),
             Utc.ymd(2021, 7, 31)
         );
+    }
+
+    #[test]
+    fn invalid_leap_year_public_api() {
+        // 2021 is not a leap year
+        assert!(super::parse("2021-02-29").is_err());
+        // 2020 is a leap year
+        assert!(super::parse("2020-02-29").is_ok());
+    }
+
+    #[test]
+    fn year_2038_boundary_public_api() {
+        // 2038-01-19 03:14:07 UTC is the max 32-bit signed timestamp
+        let result = super::parse("2147483647");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Utc.ymd(2038, 1, 19).and_hms(3, 14, 7));
+
+        // Just past the 32-bit boundary should also work
+        let result = super::parse("2147483648");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Utc.ymd(2038, 1, 19).and_hms(3, 14, 8));
+    }
+
+    #[test]
+    fn malformed_input_public_api() {
+        // Completely invalid input
+        assert!(super::parse("not-a-date").is_err());
+        assert!(super::parse("").is_err());
+        assert!(super::parse("gibberish123").is_err());
+
+        // Invalid date components
+        assert!(super::parse("2021-13-01").is_err());
+        assert!(super::parse("2021-01-32").is_err());
     }
 }

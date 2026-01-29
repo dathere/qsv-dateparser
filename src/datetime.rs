@@ -7,15 +7,28 @@ use regex::Regex;
 macro_rules! regex {
     ($re:literal $(,)?) => {{
         static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        RE.get_or_init(|| unsafe {
-            regex::RegexBuilder::new($re)
-                .unicode(false)
-                .build()
-                .unwrap_unchecked()
+        RE.get_or_init(|| {
+            // SAFETY: All regex patterns are compile-time string literals that have been
+            // validated through testing. RegexBuilder::build() only fails for invalid
+            // patterns, not runtime conditions.
+            unsafe {
+                regex::RegexBuilder::new($re)
+                    .unicode(false)
+                    .build()
+                    .unwrap_unchecked()
+            }
         })
     }};
 }
 /// Parse struct has methods implemented parsers for accepted formats.
+///
+/// # DST Ambiguity
+///
+/// When parsing datetime strings without timezone information, this parser uses
+/// [`chrono::TimeZone::from_local_datetime`] with `.single()` to convert local times.
+/// This means ambiguous times during DST transitions (e.g., when clocks "fall back")
+/// will fail to parse because `.single()` returns `None` when there are two valid
+/// UTC interpretations.
 pub struct Parse<'z, Tz2> {
     tz: &'z Tz2,
     default_time: NaiveTime,
@@ -67,7 +80,12 @@ where
             .or_else(|| self.month_ymd(input))
             .or_else(|| self.month_mdy_family(input))
             .or_else(|| self.month_dmy_family(input))
-            .unwrap_or_else(|| Err(anyhow!("{} did not match any formats.", input)))
+            .unwrap_or_else(|| {
+                Err(anyhow!(
+                    "'{input}' did not match any supported format. Supported: RFC2822/3339, \
+                     Unix timestamps, YYYY-MM-DD, MM/DD/YYYY, DD/MM/YYYY, Month DD YYYY, DD Month YYYY"
+                ))
+            })
     }
 
     #[inline]
@@ -1280,5 +1298,50 @@ mod tests {
             )
         }
         assert!(parse.slash_ymd("not-date-time").is_none());
+    }
+
+    #[test]
+    fn invalid_leap_year() {
+        let parse = Parse::new(&Utc, Utc::now().time());
+
+        // 2021 is not a leap year, so Feb 29 is invalid
+        assert!(parse.ymd("2021-02-29").is_none());
+        // 2020 is a leap year, so Feb 29 is valid
+        assert!(parse.ymd("2020-02-29").is_some());
+    }
+
+    #[test]
+    fn year_2038_boundary() {
+        let parse = Parse::new(&Utc, Utc::now().time());
+
+        // 2038-01-19 03:14:07 UTC is the max 32-bit signed timestamp
+        let result = parse.unix_timestamp("2147483647");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap().unwrap(),
+            Utc.ymd(2038, 1, 19).and_hms(3, 14, 7)
+        );
+
+        // Just past the 32-bit boundary should also work (we use i64 internally)
+        let result = parse.unix_timestamp("2147483648");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap().unwrap(),
+            Utc.ymd(2038, 1, 19).and_hms(3, 14, 8)
+        );
+    }
+
+    #[test]
+    fn invalid_date_components() {
+        let parse = Parse::new(&Utc, Utc::now().time());
+
+        // Month 13 is invalid
+        assert!(parse.ymd("2021-13-01").is_none());
+        // Day 32 is invalid
+        assert!(parse.ymd("2021-01-32").is_none());
+        // Month 00 is invalid
+        assert!(parse.ymd("2021-00-15").is_none());
+        // Day 00 is invalid
+        assert!(parse.ymd("2021-05-00").is_none());
     }
 }

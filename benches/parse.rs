@@ -26,8 +26,6 @@ fn bench_parse_all(c: &mut Criterion) {
             "08/21/71",                      // slash_mdy
             "2012/03/19 10:11:59",           // slash_ymd_hms
             "2014/3/31",                     // slash_ymd
-            "2014.03.30",                    // dot_mdy_or_ymd
-            "171113 14:14:20",               // mysql_log_timestamp
         ])
         .unwrap();
 
@@ -58,7 +56,7 @@ fn bench_parse_all(c: &mut Criterion) {
         |b, all| {
             b.iter(|| {
                 for date_str in all.iter() {
-                    let _ = parse(*date_str);
+                    let _ = parse(date_str);
                 }
             })
         },
@@ -71,7 +69,7 @@ fn bench_parse_all(c: &mut Criterion) {
         |b, all| {
             b.iter(|| {
                 for date_str in all.iter() {
-                    let _ = parse(*date_str);
+                    let _ = parse(date_str);
                 }
             })
         },
@@ -92,7 +90,7 @@ fn bench_memory_usage(c: &mut Criterion) {
         b.iter(|| {
             let mut total = 0;
             for date_str in SELECTED.get().unwrap().iter() {
-                let result = parse(*date_str);
+                let result = parse(date_str);
                 total += std::mem::size_of_val(&result);
             }
             total

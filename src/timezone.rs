@@ -110,6 +110,13 @@ where
 
 /// Returns true when two slices are equal case-insensitively (in ASCII).
 /// Assumes that the `pattern` is already converted to lower case.
+///
+/// # Why ASCII-only comparison is correct
+///
+/// Per RFC 2822 and RFC 5322, timezone abbreviations are restricted to ASCII characters.
+/// Named timezone abbreviations (like "PST", "EDT", "GMT") are defined by standards that
+/// only use ASCII letters. Therefore, ASCII case-insensitive comparison is sufficient
+/// and correct for all valid timezone inputs.
 #[inline]
 fn equals(s: &str, pattern: &str) -> bool {
     let mut xs = s.as_bytes().iter().map(|&c| match c {
