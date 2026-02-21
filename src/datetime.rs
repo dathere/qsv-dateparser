@@ -1162,6 +1162,25 @@ mod tests {
         assert!(parse.month_dmy("not-date-time").is_none());
     }
 
+    // Explicitly tests the `four_digit_year` fast path in `month_dmy` (skips `%d %B %y`) and
+    // the else-branch fallback that tries `%d %B %y` first then `%d %B %Y`.
+    #[test]
+    fn month_dmy_year_fast_path() {
+        let parse = Parse::new(&Utc, Utc::now().time());
+
+        // Fast path: 4-digit year — `four_digit_year` is true, goes directly to `%d %B %Y`
+        let four_digit = parse.month_dmy("14 May 2019").unwrap().unwrap();
+        assert_eq!(four_digit.year(), 2019);
+        assert_eq!(four_digit.month(), 5);
+        assert_eq!(four_digit.day(), 14);
+
+        // Else-branch: 2-digit year — `four_digit_year` is false, tries `%d %B %y` first
+        let two_digit = parse.month_dmy("14 May 19").unwrap().unwrap();
+        assert_eq!(two_digit.year(), 2019);
+        assert_eq!(two_digit.month(), 5);
+        assert_eq!(two_digit.day(), 14);
+    }
+
     #[test]
     fn slash_mdy_hms() {
         let parse = Parse::new(&Utc, Utc::now().time());
