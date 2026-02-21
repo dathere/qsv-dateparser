@@ -1175,6 +1175,7 @@ mod tests {
         assert_eq!(four_digit.day(), 14);
 
         // Else-branch: 2-digit year — `four_digit_year` is false, tries `%d %B %y` first
+        // chrono %y: 00–68 → 2000–2068, so "19" → 2019 (not 1919)
         let two_digit = parse.month_dmy("14 May 19").unwrap().unwrap();
         assert_eq!(two_digit.year(), 2019);
         assert_eq!(two_digit.month(), 5);
