@@ -856,11 +856,12 @@ mod tests {
             )
         }
         assert!(parse.ymd_hms_z("not-date-time").is_none());
-        // Pre-filter boundary: exactly 16 chars is rejected (< 17 guard), 17 chars proceeds to regex
-        assert!(parse.ymd_hms_z("2021-04-30 21:14").is_none()); // 16 chars, no timezone
-        assert!(parse.ymd_hms_z("2021-04-30 21UTC").is_none()); // 17 chars but byte[10]='2', not whitespace
-        // 17 chars with whitespace at index 10 proceeds to regex but regex rejects malformed input
-        assert!(parse.ymd_hms_z("2021-04-30 21:1X").is_none()); // 16 chars, pre-filter rejects
+        // Pre-filter boundary: exactly 16 chars is rejected by length guard (< 17)
+        assert!(parse.ymd_hms_z("2021-04-30 21:14").is_none()); // 16 chars, rejected by length guard
+        // 17 chars but byte[10] is not whitespace — rejected by whitespace check
+        assert!(parse.ymd_hms_z("2021-04-30X21:14Z").is_none()); // 17 chars, byte[10]='X' not space
+        // 17 chars with whitespace at byte[10] proceeds to regex but regex rejects malformed input
+        assert!(parse.ymd_hms_z("2021-04-30 21:1XZ").is_none()); // 17 chars, byte[10]=' ', regex rejects
     }
 
     #[test]
@@ -1027,10 +1028,10 @@ mod tests {
             )
         }
         assert!(parse.month_mdy_hms_z("not-date-time").is_none());
-        // Pre-filter: inputs without a 4-digit isolated sequence are rejected before regex
-        assert!(parse.month_mdy_hms_z("May 27 02:45:27 PST").is_none()); // no 4-digit year, has_year=false
-        // False-positive trigger: has 4-digit sequence but regex still rejects the format
-        assert!(parse.month_mdy_hms_z("May 27 1234 PST").is_none()); // has_year=true but fails regex
+        // Pre-filter: 20+ chars required; no isolated 4-digit year → has_year=false, rejected
+        assert!(parse.month_mdy_hms_z("May 27, 02:45:27 XX PST").is_none()); // 23 chars, no 4-digit year
+        // Pre-filter: 20+ chars with isolated 4-digit sequence → has_year=true, regex rejects format
+        assert!(parse.month_mdy_hms_z("May 27 1234 something PST").is_none()); // 25 chars, has_year=true but regex rejects
     }
 
     #[test]
