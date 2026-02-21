@@ -15,7 +15,10 @@
       "WebFetch(domain:crates.io)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(git:*)",
-      "Bash(claude mcp:*)"
+      "Bash(claude mcp:*)",
+      "Bash(cat target/criterion/parse_all/accepted_formats/before/estimates.json target/criterion/parse_throughput/1000_dates/before/estimates.json 2>/dev/null | python3 -c \"import sys,json; [print\\(json.dumps\\(json.load\\(open\\(f\\)\\), indent=2\\)\\) for f in sys.argv[1:]]\" 2>/dev/null || ls target/criterion/ 2>/dev/null)",
+      "Bash(echo === $f ===:*)",
+      "Bash(python3:*)"
     ]
   },
   "hooks": {
