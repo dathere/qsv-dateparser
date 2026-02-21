@@ -44,7 +44,7 @@ qsv-dateparser is a performance-optimized Rust library for parsing date strings 
 
 ### Key Design Decisions
 
-1. **Format detection uses regex families**: Before trying specific parsers, a quick regex check determines which format family to try, avoiding unnecessary parsing attempts.
+1. **Format detection uses regex families**: Before trying specific parsers, a quick regex check determines which format family to try, avoiding unnecessary parsing attempts. Within each family, individual parsers apply cheap byte pre-filters (e.g. checking for `:`, input length, or trailing digit patterns) *before* running their regex, eliminating regex overhead on non-matching inputs. This two-layer approach — family regex gate, then byte pre-filter, then specific regex — is the established pattern for adding new parsers or optimizing existing ones.
 
 2. **DMY preference**: The `prefer_dmy` flag controls whether `dd/mm/yyyy` or `mm/dd/yyyy` is tried first for ambiguous slash-separated dates.
 
