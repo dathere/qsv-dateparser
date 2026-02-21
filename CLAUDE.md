@@ -29,6 +29,8 @@ qsv-dateparser is a performance-optimized Rust library for parsing date strings 
   - `parse()` - Parse with Local timezone assumption
   - `parse_with_preference()` - Parse with DMY/MDY preference
   - `parse_with_timezone()` - Parse with custom timezone
+  - `parse_with_preference_and_timezone()` - Parse with DMY/MDY preference and custom timezone
+  - `parse_with()` - Parse with custom timezone and default `NaiveTime`
   - `DateTimeUtc` - Wrapper implementing `FromStr` for `str::parse()` usage
 
 - **`src/datetime.rs`**: Core parsing logic in `Parse` struct
@@ -46,6 +48,6 @@ qsv-dateparser is a performance-optimized Rust library for parsing date strings 
 
 2. **DMY preference**: The `prefer_dmy` flag controls whether `dd/mm/yyyy` or `mm/dd/yyyy` is tried first for ambiguous slash-separated dates.
 
-3. **RFC3339 has strict and relaxed modes**: Controlled by `STRICT_RFC3339` AtomicBool. Relaxed mode uses the `speedate` crate for faster, more lenient parsing.
+3. **RFC3339 is parsed inside `ymd_family`**: `rfc3339()` is tried first within `ymd_family` using `chrono::DateTime::parse_from_rfc3339()`. The parse order is: rfc2822 → unix_timestamp → slash_mdy_family → slash_ymd_family → ymd_family (rfc3339 first) → month_ymd → month_mdy_family → month_dmy_family.
 
 4. **Performance focus**: Uses `fast-float2` for timestamp parsing, minimal regex capture groups, and `#[inline]` annotations on hot paths.
