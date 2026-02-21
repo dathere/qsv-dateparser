@@ -16,7 +16,7 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(git:*)",
       "Bash(claude mcp:*)",
-      "Bash(cat target/criterion/*:*)",
+      "Bash(cat target/criterion/**/*.json:*)",
       "Bash(echo === *:*)"
     ]
   },
