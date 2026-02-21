@@ -339,6 +339,10 @@ where
             return None;
         }
 
+        // The regex above enforces \s+ after any comma or period, so removing bare ',' or '.'
+        // is equivalent to the previous `replace(", ", " ").replace(". ", " ")` for all
+        // inputs that reach this point — marginally-malformed inputs (e.g. "May 27,2012 …")
+        // still fail to parse after stripping because the digits run together.
         let dt = input.replace([',', '.'], "");
         self.tz
             .datetime_from_str(&dt, "%B %d %Y %H:%M:%S")
@@ -357,7 +361,11 @@ where
     // - September 17, 2012 at 10:09am PST
     #[inline]
     fn month_mdy_hms_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        // Fast pre-filter: must contain an isolated 4-digit year — eliminates "May 27 02:45:27"
+        // Fast pre-filter: must contain an isolated 4-digit year — eliminates "May 27 02:45:27".
+        // Skip the O(n) scan entirely for inputs too short to hold a valid month+day+year+time+tz.
+        if input.len() < 20 {
+            return None;
+        }
         let bytes = input.as_bytes();
         let has_year = (0..bytes.len().saturating_sub(3)).any(|i| {
             bytes[i..i + 4].iter().all(|b| b.is_ascii_digit())
@@ -414,6 +422,9 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
+        // The regex above enforces \s+ after any comma or period, so removing bare ',' or '.'
+        // is equivalent to the previous `replace(", ", " ").replace(". ", " ")` for all
+        // inputs that reach this point.
         let dt = input.replace([',', '.'], "");
         NaiveDate::parse_from_str(&dt, "%B %d %y")
             .or_else(|_| NaiveDate::parse_from_str(&dt, "%B %d %Y"))
@@ -845,6 +856,11 @@ mod tests {
             )
         }
         assert!(parse.ymd_hms_z("not-date-time").is_none());
+        // Pre-filter boundary: exactly 16 chars is rejected (< 17 guard), 17 chars proceeds to regex
+        assert!(parse.ymd_hms_z("2021-04-30 21:14").is_none()); // 16 chars, no timezone
+        assert!(parse.ymd_hms_z("2021-04-30 21UTC").is_none()); // 17 chars but byte[10]='2', not whitespace
+        // 17 chars with whitespace at index 10 proceeds to regex but regex rejects malformed input
+        assert!(parse.ymd_hms_z("2021-04-30 21:1X").is_none()); // 16 chars, pre-filter rejects
     }
 
     #[test]
@@ -918,6 +934,9 @@ mod tests {
             )
         }
         assert!(parse.ymd_z("not-date-time").is_none());
+        // Pre-filter boundary: exactly 10 chars (bare date) is rejected (<= 10 guard), 11+ proceeds
+        assert!(parse.ymd_z("2021-02-21").is_none()); // exactly 10 chars, rejected
+        assert!(parse.ymd_z("2021-02-21X").is_none()); // 11 chars, proceeds to regex but regex rejects
     }
 
     #[test]
@@ -1008,6 +1027,10 @@ mod tests {
             )
         }
         assert!(parse.month_mdy_hms_z("not-date-time").is_none());
+        // Pre-filter: inputs without a 4-digit isolated sequence are rejected before regex
+        assert!(parse.month_mdy_hms_z("May 27 02:45:27 PST").is_none()); // no 4-digit year, has_year=false
+        // False-positive trigger: has 4-digit sequence but regex still rejects the format
+        assert!(parse.month_mdy_hms_z("May 27 1234 PST").is_none()); // has_year=true but fails regex
     }
 
     #[test]
