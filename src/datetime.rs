@@ -221,13 +221,14 @@ where
     // - 2015-09-30 18:48:56.35272715 UTC
     #[inline]
     fn ymd_hms_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
+        // Fast pre-filter: bare dates "YYYY-MM-DD" are 10 chars; valid inputs need space + time
+        if input.len() < 17 || !input.as_bytes()[10].is_ascii_whitespace() {
+            return None;
+        }
         let re: &Regex = regex! {
                 r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
         };
 
-        if !re.is_match(input) {
-            return None;
-        }
         if let Some(caps) = re.captures(input) {
             if let Some(matched_tz) = caps.name("tz") {
                 let parse_from_str = NaiveDateTime::parse_from_str;
@@ -274,12 +275,12 @@ where
     // - 2020-07-20+08:00 (yyyy-mm-dd-07:00)
     #[inline]
     fn ymd_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
-        };
-        if !re.is_match(input) {
+        // Fast pre-filter: bare date "YYYY-MM-DD" is exactly 10 chars; timezone appended = longer
+        if input.len() <= 10 {
             return None;
         }
-
+        let re: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
+        };
         if let Some(caps) = re.captures(input) {
             if let Some(matched_tz) = caps.name("tz") {
                 return match timezone::parse(matched_tz.as_str().trim()) {
@@ -338,7 +339,7 @@ where
             return None;
         }
 
-        let dt = input.replace(", ", " ").replace(". ", " ");
+        let dt = input.replace([',', '.'], "");
         self.tz
             .datetime_from_str(&dt, "%B %d %Y %H:%M:%S")
             .or_else(|_| self.tz.datetime_from_str(&dt, "%B %d %Y %H:%M"))
@@ -356,19 +357,28 @@ where
     // - September 17, 2012 at 10:09am PST
     #[inline]
     fn month_mdy_hms_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
+        // Fast pre-filter: must contain an isolated 4-digit year — eliminates "May 27 02:45:27"
+        let bytes = input.as_bytes();
+        let has_year = (0..bytes.len().saturating_sub(3)).any(|i| {
+            bytes[i..i + 4].iter().all(|b| b.is_ascii_digit())
+                && (i == 0 || !bytes[i - 1].is_ascii_digit())
+                && bytes.get(i + 4).map_or(true, |b| !b.is_ascii_digit())
+        });
+        if !has_year {
+            return None;
+        }
         let re: &Regex = regex! {
                 r"^[a-zA-Z]{3,9}\s+\d{1,2},?\s+\d{4}\s*,?(at)?\s+\d{2}:\d{2}(:\d{2})?\s*(am|pm|AM|PM)?(?P<tz>\s+[+-:a-zA-Z0-9]{3,6})$",
         };
-        if !re.is_match(input) {
-            return None;
-        }
-
         if let Some(caps) = re.captures(input) {
             if let Some(matched_tz) = caps.name("tz") {
                 let parse_from_str = NaiveDateTime::parse_from_str;
                 return match timezone::parse(matched_tz.as_str().trim()) {
                     Ok(offset) => {
-                        let dt = input.replace(',', "").replace("at", "");
+                        let mut dt = input.replace(',', "");
+                        if let Some(pos) = dt.find("at") {
+                            dt.replace_range(pos..pos + 2, "");
+                        }
                         parse_from_str(&dt, "%B %d %Y %H:%M:%S %Z")
                             .or_else(|_| parse_from_str(&dt, "%B %d %Y %H:%M %Z"))
                             .or_else(|_| parse_from_str(&dt, "%B %d %Y %I:%M:%S %P %Z"))
@@ -404,7 +414,7 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
-        let dt = input.replace(", ", " ").replace(". ", " ");
+        let dt = input.replace([',', '.'], "");
         NaiveDate::parse_from_str(&dt, "%B %d %y")
             .or_else(|_| NaiveDate::parse_from_str(&dt, "%B %d %Y"))
             .ok()
@@ -427,7 +437,7 @@ where
             return None;
         }
 
-        let dt = input.replace(", ", " ");
+        let dt = input.replace(',', "");
         self.tz
             .datetime_from_str(&dt, "%d %B %Y %H:%M:%S")
             .or_else(|_| self.tz.datetime_from_str(&dt, "%d %B %Y %H:%M"))
