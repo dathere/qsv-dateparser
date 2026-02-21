@@ -441,6 +441,10 @@ where
     // - 14 May 2019 19:11:40.164
     #[inline]
     fn month_dmy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
+        // Fast pre-filter: time component always contains ':', skip regex for date-only inputs.
+        if !input.as_bytes().contains(&b':') {
+            return None;
+        }
         let re: &Regex = regex! {
                 r"^\d{1,2}\s+[a-zA-Z]{3,9}\s+\d{2,4},?\s+\d{1,2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]{1,9})?$"
         };
@@ -477,8 +481,20 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
-        NaiveDate::parse_from_str(input, "%d %B %y")
-            .or_else(|_| NaiveDate::parse_from_str(input, "%d %B %Y"))
+        // Fast path: if the last 4 bytes are all digits and preceded by a space, it's a
+        // 4-digit year — skip the always-failing %d %B %y (2-digit year) attempt.
+        let bytes = input.as_bytes();
+        let len = bytes.len();
+        let four_digit_year = len >= 5
+            && bytes[len - 4..].iter().all(|b| b.is_ascii_digit())
+            && bytes[len - 5].is_ascii_whitespace();
+        let parsed = if four_digit_year {
+            NaiveDate::parse_from_str(input, "%d %B %Y")
+        } else {
+            NaiveDate::parse_from_str(input, "%d %B %y")
+                .or_else(|_| NaiveDate::parse_from_str(input, "%d %B %Y"))
+        };
+        parsed
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
