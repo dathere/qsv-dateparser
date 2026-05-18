@@ -195,7 +195,7 @@ where
     #[inline]
     fn ymd_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-                r"^\d{4}-\d{2}-\d{2}(?:T|\s+)\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?\s*(am|pm|AM|PM)?$"
+                r"^\d{4}-\d{2}-\d{2}[T\s]+\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?\s*(am|pm|AM|PM)?$"
 
         };
         if !re.is_match(input) {
