@@ -253,6 +253,7 @@ pub fn parse_with_preference(input: &str, dmy_preference: bool) -> Result<DateTi
 /// and tries to parse the datetime string. When timezone is not given in the string, this function
 /// will assume and parse the datetime by the custom timezone provided in this function's arguments.
 ///
+#[inline]
 pub fn parse_with_timezone<Tz2: TimeZone>(input: &str, tz: &Tz2) -> Result<DateTime<Utc>> {
     Parse::new(tz, Utc::now().time()).parse(input)
 }
@@ -277,6 +278,7 @@ pub fn parse_with_preference_and_timezone<Tz2: TimeZone>(
 /// it's not given in datetime string, this function also use provided default naive time in parsed
 /// [`chrono::DateTime`].
 ///
+#[inline]
 pub fn parse_with<Tz2: TimeZone>(
     input: &str,
     tz: &Tz2,

@@ -221,27 +221,28 @@ where
     // - 2015-09-30 18:48:56.35272715 UTC
     #[inline]
     fn ymd_hms_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
+        // Fast pre-filter: bare dates "YYYY-MM-DD" are 10 chars; valid inputs need space + time
+        if input.len() < 17 || !input.as_bytes()[10].is_ascii_whitespace() {
+            return None;
+        }
         let re: &Regex = regex! {
                 r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
         };
 
-        if !re.is_match(input) {
-            return None;
-        }
-        if let Some(caps) = re.captures(input) {
-            if let Some(matched_tz) = caps.name("tz") {
-                let parse_from_str = NaiveDateTime::parse_from_str;
-                return match timezone::parse(matched_tz.as_str().trim()) {
-                    Ok(offset) => parse_from_str(input, "%Y-%m-%d %H:%M:%S %Z")
-                        .or_else(|_| parse_from_str(input, "%Y-%m-%d %H:%M %Z"))
-                        .or_else(|_| parse_from_str(input, "%Y-%m-%d %H:%M:%S%.f %Z"))
-                        .ok()
-                        .and_then(|parsed| offset.from_local_datetime(&parsed).single())
-                        .map(|datetime| datetime.with_timezone(&Utc))
-                        .map(Ok),
-                    Err(err) => Some(Err(err)),
-                };
-            }
+        if let Some(caps) = re.captures(input)
+            && let Some(matched_tz) = caps.name("tz")
+        {
+            let parse_from_str = NaiveDateTime::parse_from_str;
+            return match timezone::parse(matched_tz.as_str().trim()) {
+                Ok(offset) => parse_from_str(input, "%Y-%m-%d %H:%M:%S %Z")
+                    .or_else(|_| parse_from_str(input, "%Y-%m-%d %H:%M %Z"))
+                    .or_else(|_| parse_from_str(input, "%Y-%m-%d %H:%M:%S%.f %Z"))
+                    .ok()
+                    .and_then(|parsed| offset.from_local_datetime(&parsed).single())
+                    .map(|datetime| datetime.with_timezone(&Utc))
+                    .map(Ok),
+                Err(err) => Some(Err(err)),
+            };
         }
         None
     }
@@ -274,30 +275,30 @@ where
     // - 2020-07-20+08:00 (yyyy-mm-dd-07:00)
     #[inline]
     fn ymd_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
-        };
-        if !re.is_match(input) {
+        // Fast pre-filter: bare date "YYYY-MM-DD" is exactly 10 chars; timezone appended = longer
+        if input.len() <= 10 {
             return None;
         }
-
-        if let Some(caps) = re.captures(input) {
-            if let Some(matched_tz) = caps.name("tz") {
-                return match timezone::parse(matched_tz.as_str().trim()) {
-                    Ok(offset) => {
-                        let now = Utc::now()
-                            .date()
-                            .and_time(self.default_time)?
-                            .with_timezone(&offset);
-                        NaiveDate::parse_from_str(input, "%Y-%m-%d %Z")
-                            .ok()
-                            .map(|parsed| parsed.and_time(now.time()))
-                            .and_then(|datetime| offset.from_local_datetime(&datetime).single())
-                            .map(|at_tz| at_tz.with_timezone(&Utc))
-                            .map(Ok)
-                    }
-                    Err(err) => Some(Err(err)),
-                };
-            }
+        let re: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
+        };
+        if let Some(caps) = re.captures(input)
+            && let Some(matched_tz) = caps.name("tz")
+        {
+            return match timezone::parse(matched_tz.as_str().trim()) {
+                Ok(offset) => {
+                    let now = Utc::now()
+                        .date()
+                        .and_time(self.default_time)?
+                        .with_timezone(&offset);
+                    NaiveDate::parse_from_str(input, "%Y-%m-%d %Z")
+                        .ok()
+                        .map(|parsed| parsed.and_time(now.time()))
+                        .and_then(|datetime| offset.from_local_datetime(&datetime).single())
+                        .map(|at_tz| at_tz.with_timezone(&Utc))
+                        .map(Ok)
+                }
+                Err(err) => Some(Err(err)),
+            };
         }
         None
     }
@@ -338,7 +339,11 @@ where
             return None;
         }
 
-        let dt = input.replace(", ", " ").replace(". ", " ");
+        // The regex above enforces \s+ after any comma or period, so removing bare ',' or '.'
+        // is equivalent to the previous `replace(", ", " ").replace(". ", " ")` for all
+        // inputs that reach this point — marginally-malformed inputs (e.g. "May 27,2012 …")
+        // still fail to parse after stripping because the digits run together.
+        let dt = input.replace([',', '.'], "");
         self.tz
             .datetime_from_str(&dt, "%B %d %Y %H:%M:%S")
             .or_else(|_| self.tz.datetime_from_str(&dt, "%B %d %Y %H:%M"))
@@ -356,31 +361,44 @@ where
     // - September 17, 2012 at 10:09am PST
     #[inline]
     fn month_mdy_hms_z(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
+        // Fast pre-filter: must contain an isolated 4-digit year — eliminates "May 27 02:45:27".
+        // Skip the O(n) scan entirely for inputs too short to hold a valid month+day+year+time+tz.
+        if input.len() < 20 {
+            return None;
+        }
+        let bytes = input.as_bytes();
+        let has_year = (0..bytes.len().saturating_sub(3)).any(|i| {
+            bytes[i..i + 4].iter().all(|b| b.is_ascii_digit())
+                && (i == 0 || !bytes[i - 1].is_ascii_digit())
+                && bytes.get(i + 4).is_none_or(|b| !b.is_ascii_digit())
+        });
+        if !has_year {
+            return None;
+        }
         let re: &Regex = regex! {
                 r"^[a-zA-Z]{3,9}\s+\d{1,2},?\s+\d{4}\s*,?(at)?\s+\d{2}:\d{2}(:\d{2})?\s*(am|pm|AM|PM)?(?P<tz>\s+[+-:a-zA-Z0-9]{3,6})$",
         };
-        if !re.is_match(input) {
-            return None;
-        }
-
-        if let Some(caps) = re.captures(input) {
-            if let Some(matched_tz) = caps.name("tz") {
-                let parse_from_str = NaiveDateTime::parse_from_str;
-                return match timezone::parse(matched_tz.as_str().trim()) {
-                    Ok(offset) => {
-                        let dt = input.replace(',', "").replace("at", "");
-                        parse_from_str(&dt, "%B %d %Y %H:%M:%S %Z")
-                            .or_else(|_| parse_from_str(&dt, "%B %d %Y %H:%M %Z"))
-                            .or_else(|_| parse_from_str(&dt, "%B %d %Y %I:%M:%S %P %Z"))
-                            .or_else(|_| parse_from_str(&dt, "%B %d %Y %I:%M %P %Z"))
-                            .ok()
-                            .and_then(|parsed| offset.from_local_datetime(&parsed).single())
-                            .map(|datetime| datetime.with_timezone(&Utc))
-                            .map(Ok)
+        if let Some(caps) = re.captures(input)
+            && let Some(matched_tz) = caps.name("tz")
+        {
+            let parse_from_str = NaiveDateTime::parse_from_str;
+            return match timezone::parse(matched_tz.as_str().trim()) {
+                Ok(offset) => {
+                    let mut dt = input.replace(',', "");
+                    if let Some(pos) = dt.find("at") {
+                        dt.replace_range(pos..pos + 2, "");
                     }
-                    Err(err) => Some(Err(err)),
-                };
-            }
+                    parse_from_str(&dt, "%B %d %Y %H:%M:%S %Z")
+                        .or_else(|_| parse_from_str(&dt, "%B %d %Y %H:%M %Z"))
+                        .or_else(|_| parse_from_str(&dt, "%B %d %Y %I:%M:%S %P %Z"))
+                        .or_else(|_| parse_from_str(&dt, "%B %d %Y %I:%M %P %Z"))
+                        .ok()
+                        .and_then(|parsed| offset.from_local_datetime(&parsed).single())
+                        .map(|datetime| datetime.with_timezone(&Utc))
+                        .map(Ok)
+                }
+                Err(err) => Some(Err(err)),
+            };
         }
         None
     }
@@ -404,7 +422,10 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
-        let dt = input.replace(", ", " ").replace(". ", " ");
+        // The regex above enforces \s+ after any comma or period, so removing bare ',' or '.'
+        // is equivalent to the previous `replace(", ", " ").replace(". ", " ")` for all
+        // inputs that reach this point.
+        let dt = input.replace([',', '.'], "");
         NaiveDate::parse_from_str(&dt, "%B %d %y")
             .or_else(|_| NaiveDate::parse_from_str(&dt, "%B %d %Y"))
             .ok()
@@ -420,6 +441,10 @@ where
     // - 14 May 2019 19:11:40.164
     #[inline]
     fn month_dmy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
+        // Fast pre-filter: time component always contains ':', skip regex for date-only inputs.
+        if !input.as_bytes().contains(&b':') {
+            return None;
+        }
         let re: &Regex = regex! {
                 r"^\d{1,2}\s+[a-zA-Z]{3,9}\s+\d{2,4},?\s+\d{1,2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]{1,9})?$"
         };
@@ -427,7 +452,7 @@ where
             return None;
         }
 
-        let dt = input.replace(", ", " ");
+        let dt = input.replace(',', "");
         self.tz
             .datetime_from_str(&dt, "%d %B %Y %H:%M:%S")
             .or_else(|_| self.tz.datetime_from_str(&dt, "%d %B %Y %H:%M"))
@@ -456,8 +481,20 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
-        NaiveDate::parse_from_str(input, "%d %B %y")
-            .or_else(|_| NaiveDate::parse_from_str(input, "%d %B %Y"))
+        // Fast path: if the last 4 bytes are all digits and preceded by a space, it's a
+        // 4-digit year — skip the always-failing %d %B %y (2-digit year) attempt.
+        let bytes = input.as_bytes();
+        let len = bytes.len();
+        let four_digit_year = len >= 5
+            && bytes[len - 4..].iter().all(|b| b.is_ascii_digit())
+            && bytes[len - 5].is_ascii_whitespace();
+        let parsed = if four_digit_year {
+            NaiveDate::parse_from_str(input, "%d %B %Y")
+        } else {
+            NaiveDate::parse_from_str(input, "%d %B %y")
+                .or_else(|_| NaiveDate::parse_from_str(input, "%d %B %Y"))
+        };
+        parsed
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
@@ -748,7 +785,7 @@ mod tests {
     fn ymd_hms() {
         let parse = Parse::new(&Utc, Utc::now().time());
 
-        let test_cases = vec![
+        let test_cases = [
             ("2021-04-30 21:14", Utc.ymd(2021, 4, 30).and_hms(21, 14, 0)),
             (
                 "2021-04-30 21:14:10",
@@ -791,7 +828,7 @@ mod tests {
     fn ymd_hms_z() {
         let parse = Parse::new(&Utc, Utc::now().time());
 
-        let test_cases = vec![
+        let test_cases = [
             (
                 "2017-11-25 13:31:15 PST",
                 Utc.ymd(2017, 11, 25).and_hms(21, 31, 15),
@@ -835,6 +872,12 @@ mod tests {
             )
         }
         assert!(parse.ymd_hms_z("not-date-time").is_none());
+        // Pre-filter boundary: exactly 16 chars is rejected by length guard (< 17)
+        assert!(parse.ymd_hms_z("2021-04-30 21:14").is_none()); // 16 chars, rejected by length guard
+        // 17 chars but byte[10] is not whitespace — rejected by whitespace check
+        assert!(parse.ymd_hms_z("2021-04-30X21:14Z").is_none()); // 17 chars, byte[10]='X' not space
+        // 17 chars with whitespace at byte[10] proceeds to regex but regex rejects malformed input
+        assert!(parse.ymd_hms_z("2021-04-30 21:1XZ").is_none()); // 17 chars, byte[10]=' ', regex rejects
     }
 
     #[test]
@@ -908,6 +951,9 @@ mod tests {
             )
         }
         assert!(parse.ymd_z("not-date-time").is_none());
+        // Pre-filter boundary: exactly 10 chars (bare date) is rejected (<= 10 guard), 11+ proceeds
+        assert!(parse.ymd_z("2021-02-21").is_none()); // exactly 10 chars, rejected
+        assert!(parse.ymd_z("2021-02-21X").is_none()); // 11 chars, proceeds to regex but regex rejects
     }
 
     #[test]
@@ -998,6 +1044,10 @@ mod tests {
             )
         }
         assert!(parse.month_mdy_hms_z("not-date-time").is_none());
+        // Pre-filter: 20+ chars required; no isolated 4-digit year → has_year=false, rejected
+        assert!(parse.month_mdy_hms_z("May 27, 02:45:27 XX PST").is_none()); // 23 chars, no 4-digit year
+        // Pre-filter: 20+ chars with isolated 4-digit sequence → has_year=true, regex rejects format
+        assert!(parse.month_mdy_hms_z("May 27 1234 something PST").is_none()); // 25 chars, has_year=true but regex rejects
     }
 
     #[test]
@@ -1110,6 +1160,26 @@ mod tests {
             )
         }
         assert!(parse.month_dmy("not-date-time").is_none());
+    }
+
+    // Explicitly tests the `four_digit_year` fast path in `month_dmy` (skips `%d %B %y`) and
+    // the else-branch fallback that tries `%d %B %y` first then `%d %B %Y`.
+    #[test]
+    fn month_dmy_year_fast_path() {
+        let parse = Parse::new(&Utc, Utc::now().time());
+
+        // Fast path: 4-digit year — `four_digit_year` is true, goes directly to `%d %B %Y`
+        let four_digit = parse.month_dmy("14 May 2019").unwrap().unwrap();
+        assert_eq!(four_digit.year(), 2019);
+        assert_eq!(four_digit.month(), 5);
+        assert_eq!(four_digit.day(), 14);
+
+        // Else-branch: 2-digit year — `four_digit_year` is false, tries `%d %B %y` first
+        // chrono %y: 00–68 → 2000–2068, so "19" → 2019 (not 1919)
+        let two_digit = parse.month_dmy("14 May 19").unwrap().unwrap();
+        assert_eq!(two_digit.year(), 2019);
+        assert_eq!(two_digit.month(), 5);
+        assert_eq!(two_digit.day(), 14);
     }
 
     #[test]
