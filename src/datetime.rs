@@ -181,7 +181,7 @@ where
             .map(Ok)
     }
 
-    // yyyy-mm-dd hh:mm:ss
+    // yyyy-mm-dd hh:mm:ss  (separator is space OR ISO 8601 'T')
     // - 2014-04-26 05:24:37 PM
     // - 2021-04-30 21:14
     // - 2021-04-30 21:14:10
@@ -189,22 +189,47 @@ where
     // - 2014-04-26 17:24:37.123
     // - 2014-04-26 17:24:37.3186369
     // - 2012-08-03 18:31:59.257000000
+    // - 2020-01-15T08:00
+    // - 2020-01-15T08:00:00
+    // - 2020-01-15T08:00:00.123456
     #[inline]
     fn ymd_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
-                r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?\s*(am|pm|AM|PM)?$"
+                r"^\d{4}-\d{2}-\d{2}(?:T|\s+)\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?\s*(am|pm|AM|PM)?$"
 
         };
         if !re.is_match(input) {
             return None;
         }
 
+        // Byte 10 is the date/time separator. The regex guarantees the input
+        // has at least 16 bytes and that byte 10 is either 'T' or ASCII
+        // whitespace, so picking the format-string family on this single byte
+        // avoids doubling the trial-parse chain for the common space case.
+        let (fmt_hms, fmt_hm, fmt_hms_f, fmt_ims_p, fmt_im_p) = if input.as_bytes()[10] == b'T' {
+            (
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M",
+                "%Y-%m-%dT%H:%M:%S%.f",
+                "%Y-%m-%dT%I:%M:%S %P",
+                "%Y-%m-%dT%I:%M %P",
+            )
+        } else {
+            (
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+                "%Y-%m-%d %H:%M:%S%.f",
+                "%Y-%m-%d %I:%M:%S %P",
+                "%Y-%m-%d %I:%M %P",
+            )
+        };
+
         self.tz
-            .datetime_from_str(input, "%Y-%m-%d %H:%M:%S")
-            .or_else(|_| self.tz.datetime_from_str(input, "%Y-%m-%d %H:%M"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%Y-%m-%d %H:%M:%S%.f"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%Y-%m-%d %I:%M:%S %P"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%Y-%m-%d %I:%M %P"))
+            .datetime_from_str(input, fmt_hms)
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_hm))
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_hms_f))
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_ims_p))
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_im_p))
             .ok()
             .map(|parsed| parsed.with_timezone(&Utc))
             .map(Ok)
@@ -811,6 +836,22 @@ mod tests {
                 "2012-08-03 18:31:59.257000000",
                 Utc.ymd(2012, 8, 3).and_hms_nano(18, 31, 59, 257000000),
             ),
+            // ISO 8601 with 'T' separator and no timezone (naive wall-clock).
+            // Must agree with the space-separated form on the same wall-clock instant.
+            ("2020-01-15T08:00", Utc.ymd(2020, 1, 15).and_hms(8, 0, 0)),
+            ("2020-01-15T08:00:00", Utc.ymd(2020, 1, 15).and_hms(8, 0, 0)),
+            (
+                "2020-01-15T08:00:00.123",
+                Utc.ymd(2020, 1, 15).and_hms_milli(8, 0, 0, 123),
+            ),
+            (
+                "2020-01-15T08:00:00.123456",
+                Utc.ymd(2020, 1, 15).and_hms_micro(8, 0, 0, 123456),
+            ),
+            (
+                "2020-01-15T08:00:00.123456789",
+                Utc.ymd(2020, 1, 15).and_hms_nano(8, 0, 0, 123456789),
+            ),
         ];
 
         for &(input, want) in test_cases.iter() {
@@ -822,6 +863,11 @@ mod tests {
             )
         }
         assert!(parse.ymd_hms("not-date-time").is_none());
+
+        // T and space separators must produce the same instant.
+        let t_form = parse.ymd_hms("2020-01-15T08:00:00").unwrap().unwrap();
+        let space_form = parse.ymd_hms("2020-01-15 08:00:00").unwrap().unwrap();
+        assert_eq!(t_form, space_form, "T-separator vs space disagree");
     }
 
     #[test]
