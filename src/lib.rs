@@ -756,9 +756,16 @@ mod tests {
 
     #[test]
     fn parse_unambiguous_dmy() {
+        // `parse()` uses Local timezone and pads date-only inputs with the
+        // current time of day, so the resulting UTC date can roll by ±1 day
+        // depending on host TZ and the moment the test runs. Assert on the
+        // Local date — that's what `parse()` actually models for this input.
         assert_eq!(
-            super::parse("31/3/22").unwrap().date(),
-            Utc.ymd(2022, 3, 31)
+            super::parse("31/3/22")
+                .unwrap()
+                .with_timezone(&Local)
+                .date(),
+            Local.ymd(2022, 3, 31)
         );
         assert_eq!(
             super::parse_with_preference("3/31/22", true)
