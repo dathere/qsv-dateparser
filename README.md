@@ -22,7 +22,7 @@ It also adds support for parsing dates in DMY format, with the `parse_with_prefe
 "2017-11-25T22:34:50Z",
 // rfc2822
 "Wed, 02 Jun 2021 06:31:39 GMT",
-// yyyy-mm-dd hh:mm:ss
+// yyyy-mm-dd hh:mm:ss   (separator: space or ISO 8601 'T')
 "2014-04-26 05:24:37 PM",
 "2021-04-30 21:14",
 "2021-04-30 21:14:10",
@@ -30,6 +30,9 @@ It also adds support for parsing dates in DMY format, with the `parse_with_prefe
 "2014-04-26 17:24:37.123",
 "2014-04-26 17:24:37.3186369",
 "2012-08-03 18:31:59.257000000",
+"2020-01-15T08:00",
+"2020-01-15T08:00:00",
+"2020-01-15T08:00:00.123456",
 // yyyy-mm-dd hh:mm:ss z
 "2017-11-25 13:31:15 PST",
 "2017-11-25 13:31 PST",

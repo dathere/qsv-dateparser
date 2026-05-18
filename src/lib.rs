@@ -756,9 +756,16 @@ mod tests {
 
     #[test]
     fn parse_unambiguous_dmy() {
+        // `parse()` uses Local timezone and pads date-only inputs with the
+        // current time of day, so the resulting UTC date can roll by ±1 day
+        // depending on host TZ and the moment the test runs. Assert on the
+        // Local date — that's what `parse()` actually models for this input.
         assert_eq!(
-            super::parse("31/3/22").unwrap().date(),
-            Utc.ymd(2022, 3, 31)
+            super::parse("31/3/22")
+                .unwrap()
+                .with_timezone(&Local)
+                .date(),
+            Local.ymd(2022, 3, 31)
         );
         assert_eq!(
             super::parse_with_preference("3/31/22", true)
@@ -772,5 +779,51 @@ mod tests {
                 .date(),
             Utc.ymd(2021, 7, 31)
         );
+    }
+
+    // Regression: ISO 8601 with 'T' separator and no timezone (e.g. Python's
+    // datetime.isoformat() without astimezone) must parse via the naive
+    // wall-clock path, matching the equivalent space-separated form.
+    #[test]
+    fn parse_iso_t_no_tz() {
+        // Bare T, no fractional, no tz.
+        let got = super::parse_with_preference("2020-01-15T08:00:00", false).unwrap();
+        assert_eq!(got, Utc.ymd(2020, 1, 15).and_hms(8, 0, 0));
+
+        // T, no seconds, no tz.
+        let got = super::parse_with_preference("2020-01-15T08:00", false).unwrap();
+        assert_eq!(got, Utc.ymd(2020, 1, 15).and_hms(8, 0, 0));
+
+        // T with millisecond + microsecond + nanosecond precision.
+        for (input, want) in [
+            (
+                "2020-01-15T08:00:00.123",
+                Utc.ymd(2020, 1, 15).and_hms_milli(8, 0, 0, 123),
+            ),
+            (
+                "2020-01-15T08:00:00.123456",
+                Utc.ymd(2020, 1, 15).and_hms_micro(8, 0, 0, 123456),
+            ),
+            (
+                "2020-01-15T08:00:00.123456789",
+                Utc.ymd(2020, 1, 15).and_hms_nano(8, 0, 0, 123456789),
+            ),
+        ] {
+            assert_eq!(
+                super::parse_with_preference(input, false).unwrap(),
+                want,
+                "parse_iso_t_no_tz/{input}"
+            );
+        }
+
+        // T-form and space-form must produce the same instant.
+        assert_eq!(
+            super::parse_with_preference("2020-01-15T08:00:00", false).unwrap(),
+            super::parse_with_preference("2020-01-15 08:00:00", false).unwrap(),
+        );
+
+        // Existing tz-bearing T-forms must continue to parse (no regression).
+        assert!(super::parse_with_preference("2020-01-15T08:00:00Z", false).is_ok());
+        assert!(super::parse_with_preference("2020-01-15T08:00:00+00:00", false).is_ok());
     }
 }
