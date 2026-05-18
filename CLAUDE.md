@@ -15,9 +15,29 @@ cargo test
 # Run a specific test
 cargo test test_name
 
-# Run benchmarks
+# Run benchmarks (Criterion, harness disabled in Cargo.toml)
 cargo bench
 ```
+
+### Lint and format (CI-enforced — run before committing)
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --tests --all-features -- -D warnings
+```
+
+CI (`.github/workflows/ci.yml`) runs `check`, `test`, `fmt`, and `clippy` on
+Linux/macOS/Windows × stable/nightly. A clippy warning fails the build.
+
+Note: `Cargo.lock` is gitignored (library-crate convention). Don't stage it.
+
+### Local skills and agents (under `.claude/`)
+
+- `/bench-compare save|compare|run` — Criterion baseline workflow; the saved
+  baseline is named `before`.
+- `/release <version>` — full release checklist (bump, test, clippy, commit, tag).
+- `agents/performance-reviewer.md` — proactive perf reviewer triggered on
+  changes to `src/datetime.rs`, `src/lib.rs`, or `src/timezone.rs`.
 
 ## Architecture
 
@@ -34,10 +54,9 @@ qsv-dateparser is a performance-optimized Rust library for parsing date strings 
   - `DateTimeUtc` - Wrapper implementing `FromStr` for `str::parse()` usage
 
 - **`src/datetime.rs`**: Core parsing logic in `Parse` struct
-  - Uses regex to detect format families, then tries specific parsers
-  - Parse order: rfc2822 -> unix_timestamp -> slash formats -> ymd formats -> month formats
+  - Uses regex to detect format families, then tries specific parsers (see Key Design Decision #3 below for the exact order)
   - Each format family has a detection regex followed by specific format attempts using `or_else()` chains
-  - Regexes are compiled once using `OnceLock` via a custom macro
+  - Regexes are compiled once using `OnceLock` via a custom `regex!` macro
 
 - **`src/timezone.rs`**: Timezone offset parsing
   - Handles numeric offsets (+0800, +08:00) and named zones (PST, UTC, GMT)
