@@ -15,6 +15,37 @@ macro_rules! regex {
         })
     }};
 }
+/// Lookup table of bytes that may legally appear in an accepted date format:
+/// ASCII alphanumerics, ASCII whitespace (`\s` under `unicode(false)` =
+/// space, `\t`, `\n`, `\x0B`, `\x0C`, `\r`), and the separators `- + / : . ,`.
+const fn build_date_byte_table() -> [bool; 256] {
+    let mut table = [false; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let b = i as u8;
+        table[i] = b.is_ascii_alphanumeric()
+            || matches!(b, b' ' | 0x09..=0x0D)
+            || matches!(b, b'-' | b'+' | b'/' | b':' | b'.' | b',');
+        i += 1;
+    }
+    table
+}
+
+static DATE_BYTE: [bool; 256] = build_date_byte_table();
+
+/// Cheap structural pre-filter run before the regex dispatch chain.
+///
+/// Any byte outside [`DATE_BYTE`] (e.g. `_`, `#`, `(`, or any non-ASCII byte)
+/// means the input cannot be a date, so we can bail before running 5-6 failing
+/// regex probes. This is the common, hot case for non-date string columns. It is
+/// intentionally conservative: it rejects nothing that currently parses
+/// (including bare `inf`/`nan` unix-timestamp inputs, which are all-ASCII
+/// letters). The table collapses the per-byte test to a single load + branch.
+#[inline]
+fn cannot_be_date(input: &str) -> bool {
+    input.bytes().any(|b| !DATE_BYTE[b as usize])
+}
+
 /// Parse struct has methods implemented parsers for accepted formats.
 pub struct Parse<'z, Tz2> {
     tz: &'z Tz2,
@@ -57,16 +88,36 @@ where
 
     /// This method tries to parse the input datetime string with a list of accepted formats. See
     /// more examples from [`Parse`], [`crate::parse()`] and [`crate::parse_with_timezone()`].
+    ///
+    /// Order rationale: the regex-gated families are tried first because their
+    /// `is_match` gate rejects non-matching inputs cheaply. The two parsers
+    /// without a family regex gate — `unix_timestamp` (runs `fast_float2`) and
+    /// `rfc2822` (runs `parse_from_rfc2822`) — are tried last to avoid paying
+    /// their cost on the common ISO/slash dates. Each still applies its own cheap
+    /// byte pre-filter before the heavy parse (`unix_timestamp` checks the first
+    /// byte against the leads `fast_float2` accepts; `rfc2822` requires a `:`).
+    ///
+    /// This reorder is result-preserving:
+    /// - A `fast_float2`-parseable input (pure number, or `inf`/`nan`) matches no
+    ///   family gate (they all require `/`, an interior `-`, or a letters+space
+    ///   shape a bare number lacks), so it still reaches `unix_timestamp`.
+    /// - An `rfc2822` input always carries a timezone, which makes the
+    ///   `$`-anchored `month_dmy_*` regexes fail; conversely `month_dmy_*` only
+    ///   succeeds without a timezone, which makes `rfc2822` fail. The two are
+    ///   mutually exclusive, so deferring `rfc2822` cannot change any result.
     #[inline]
     pub fn parse(&self, input: &str) -> Result<DateTime<Utc>> {
-        self.rfc2822(input)
-            .or_else(|| self.unix_timestamp(input))
-            .or_else(|| self.slash_mdy_family(input))
+        if cannot_be_date(input) {
+            return Err(anyhow!("{} did not match any formats.", input));
+        }
+        self.slash_mdy_family(input)
             .or_else(|| self.slash_ymd_family(input))
             .or_else(|| self.ymd_family(input))
             .or_else(|| self.month_ymd(input))
             .or_else(|| self.month_mdy_family(input))
             .or_else(|| self.month_dmy_family(input))
+            .or_else(|| self.unix_timestamp(input))
+            .or_else(|| self.rfc2822(input))
             .unwrap_or_else(|| Err(anyhow!("{} did not match any formats.", input)))
     }
 
@@ -147,6 +198,15 @@ where
     // - 1671673426.123456789
     #[inline]
     fn unix_timestamp(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
+        // Cheap pre-filter before the heavier float parse: `fast_float2` only
+        // accepts inputs whose first byte is a digit, sign, dot, or the start of
+        // `inf`/`nan` (it rejects leading whitespace and empty input). This is the
+        // last-resort numeric parser, so most inputs reaching it are non-numeric.
+        let &b0 = input.as_bytes().first()?;
+        if !(b0.is_ascii_digit() || matches!(b0, b'+' | b'-' | b'.' | b'i' | b'I' | b'n' | b'N')) {
+            return None;
+        }
+
         let ts_sec_val: f64 = if let Ok(val) = fast_float2::parse(input) {
             val
         } else {
@@ -175,6 +235,13 @@ where
     // - Wed, 02 Jun 2021 06:31:39 GMT
     #[inline]
     fn rfc2822(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
+        // Fast pre-filter: every RFC2822 datetime carries a time-of-day
+        // (`hour ":" minute`), so it always contains ':'. Skip the
+        // `parse_from_rfc2822` attempt for colon-free inputs. This is the
+        // last-resort parser, so most inputs reaching it are non-rfc2822.
+        if !input.as_bytes().contains(&b':') {
+            return None;
+        }
         DateTime::parse_from_rfc2822(input)
             .ok()
             .map(|parsed| parsed.with_timezone(&Utc))
