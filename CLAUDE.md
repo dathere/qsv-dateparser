@@ -65,8 +65,10 @@ qsv-dateparser is a performance-optimized Rust library for parsing date strings 
 
 1. **Format detection uses regex families**: Before trying specific parsers, a quick regex check determines which format family to try, avoiding unnecessary parsing attempts. Within each family, individual parsers apply cheap byte pre-filters (e.g. checking for `:`, input length, or trailing digit patterns) *before* running their regex, eliminating regex overhead on non-matching inputs. This two-layer approach — family regex gate, then byte pre-filter, then specific regex — is the established pattern for adding new parsers or optimizing existing ones.
 
+   A whole-input structural pre-filter (`cannot_be_date`, backed by the `DATE_BYTE` lookup table) runs *before* the dispatch chain: any input containing a byte that cannot appear in any accepted format (`_`, `#`, non-ASCII, etc.) returns `Err` immediately, skipping all regex probes. This is the dominant cost saver on non-date string columns.
+
 2. **DMY preference**: The `prefer_dmy` flag controls whether `dd/mm/yyyy` or `mm/dd/yyyy` is tried first for ambiguous slash-separated dates.
 
-3. **RFC3339 is parsed inside `ymd_family`**: `rfc3339()` is tried first within `ymd_family` using `chrono::DateTime::parse_from_rfc3339()`. The parse order is: rfc2822 → unix_timestamp → slash_mdy_family → slash_ymd_family → ymd_family (rfc3339 first) → month_ymd → month_mdy_family → month_dmy_family.
+3. **RFC3339 is parsed inside `ymd_family`**: `rfc3339()` is tried first within `ymd_family` using `chrono::DateTime::parse_from_rfc3339()`. The parse order is: slash_mdy_family → slash_ymd_family → ymd_family (rfc3339 first) → month_ymd → month_mdy_family → month_dmy_family → unix_timestamp → rfc2822. The two *ungated* parsers (`unix_timestamp`, `rfc2822`) run last because they execute unconditionally on every input; deferring them is result-preserving (floats match no family gate; rfc2822 inputs carry a timezone that the `$`-anchored `month_dmy_*` regexes reject, and vice-versa).
 
 4. **Performance focus**: Uses `fast-float2` for timestamp parsing, minimal regex capture groups, and `#[inline]` annotations on hot paths.

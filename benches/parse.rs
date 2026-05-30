@@ -86,6 +86,67 @@ fn bench_parse_each(c: &mut Criterion) {
     group.finish();
 }
 
+// Benchmark the FAILURE hot path: non-date string columns. This is the dominant
+// cost of `qsv stats --infer-dates` on real data, where most columns are not
+// dates and every value runs the full dispatch chain before failing.
+static FAILURES: OnceLock<Vec<&'static str>> = OnceLock::new();
+
+fn bench_parse_failures(c: &mut Criterion) {
+    FAILURES
+        .set(
+            (0..1000)
+                .map(|i| {
+                    // Mirrors the qsv-dateparser-opt repro column `category_value_%d`.
+                    // The '_' is rejected by the structural pre-filter before any regex.
+                    format!("category_value_{}", i % 500)
+                })
+                .map(|s| Box::leak(s.into_boxed_str()) as &'static str)
+                .collect(),
+        )
+        .unwrap();
+
+    c.bench_with_input(
+        BenchmarkId::new("parse_failures", "1000_nondate_strings"),
+        &FAILURES.get().unwrap(),
+        |b, all| {
+            b.iter(|| {
+                for date_str in all.iter() {
+                    let _ = parse(*date_str);
+                }
+            })
+        },
+    );
+}
+
+// Benchmark the OTHER failure hot path: non-date *word* columns (status,
+// category, region values) that use only date-valid bytes, so they pass the
+// structural pre-filter and run the full gate chain + `unix_timestamp` +
+// `rfc2822` before failing. This is the path the family reorder and the
+// `unix_timestamp` first-byte pre-check operate on.
+static WORD_FAILURES: OnceLock<Vec<&'static str>> = OnceLock::new();
+
+fn bench_parse_word_failures(c: &mut Criterion) {
+    const WORDS: [&str; 10] = [
+        "pending", "active", "north", "south", "category", "region", "status", "approved",
+        "rejected", "unknown",
+    ];
+    WORD_FAILURES
+        .set((0..1000).map(|i| WORDS[i % WORDS.len()]).collect())
+        .unwrap();
+
+    c.bench_with_input(
+        BenchmarkId::new("parse_word_failures", "1000_nondate_words"),
+        &WORD_FAILURES.get().unwrap(),
+        |b, all| {
+            b.iter(|| {
+                for date_str in all.iter() {
+                    let _ = parse(*date_str);
+                }
+            })
+        },
+    );
+}
+
 // Benchmark memory usage
 fn bench_memory_usage(c: &mut Criterion) {
     c.bench_function("memory_usage", |b| {
@@ -104,6 +165,8 @@ criterion_group!(
     benches,
     bench_parse_all,
     bench_parse_each,
+    bench_parse_failures,
+    bench_parse_word_failures,
     bench_memory_usage
 );
 criterion_main!(benches);

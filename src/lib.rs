@@ -826,4 +826,46 @@ mod tests {
         assert!(super::parse_with_preference("2020-01-15T08:00:00Z", false).is_ok());
         assert!(super::parse_with_preference("2020-01-15T08:00:00+00:00", false).is_ok());
     }
+
+    // Structural pre-filter: inputs containing a byte that cannot appear in any
+    // accepted date format (e.g. '_', '#', non-ASCII) must fail fast, while every
+    // currently-accepted input must still parse. Correctness guard for the
+    // pre-filter optimization (must not change which strings parse).
+    #[test]
+    fn prefilter_rejects_non_date_strings() {
+        // The qsv-dateparser-opt failure hot path: '_' is not a valid date byte.
+        for input in [
+            "category_value_123",
+            "first_name",
+            "value#42",
+            "a(b)c1",
+            "100%",
+            "naïve_2020", // non-ASCII byte
+        ] {
+            assert!(
+                super::parse(input).is_err(),
+                "prefilter should reject {input}"
+            );
+        }
+
+        // Pre-filter must NOT reject anything that currently parses. Spot-check
+        // every separator family plus the bare float specials accepted by the
+        // unix-timestamp path (all-ASCII letters, no digits).
+        for input in [
+            "2021-04-30 21:14:10",           // '-' ':' space
+            "2020-07-20+08:00",              // '+'
+            "03/19/2012 10:11:59.3186369",   // '/' '.'
+            "May 26, 2021, 12:49 AM PDT",    // ',' letters
+            "Wed, 02 Jun 2021 06:31:39 GMT", // rfc2822
+            "1671673426.123456789",          // timestamp with '.'
+            "-770172300",                    // negative timestamp
+            "inf",                           // fast_float2 special
+            "nan",                           // fast_float2 special
+        ] {
+            assert!(
+                super::parse(input).is_ok(),
+                "prefilter must not reject {input}"
+            );
+        }
+    }
 }

@@ -3,7 +3,12 @@
 A pointer index for `find_symbol` / `replace_symbol_body` work. Line numbers
 are **0-based**, matching Serena's tool output.
 
-## `src/lib.rs` (~776 lines)
+> NOTE: After the 0.15.x parse-dispatch optimization (structural pre-filter +
+> family reorder), absolute line numbers in `src/datetime.rs` shifted by ~+20
+> for symbols below `parse`. Prefer `find_symbol` by name over the line numbers
+> below, which are approximate until re-derived.
+
+## `src/lib.rs` (~830 lines)
 Public API and integration tests.
 - `MIDNIGHT` (const) — default `NaiveTime` used across parsers.
 - Functions:
@@ -13,66 +18,60 @@ Public API and integration tests.
   - `parse_with_preference_and_timezone(input, prefer_dmy, tz)`.
   - `parse_with(input, tz, default_time)` — base builder.
 - Struct `DateTimeUtc` + `impl FromStr for DateTimeUtc`.
-- `mod tests` — large block of round-trip parse assertions.
+- `mod tests` — round-trip parse assertions. Includes
+  `prefilter_rejects_non_date_strings` (pins the structural pre-filter).
 
-## `src/datetime.rs` (~1354 lines) — the core
-Top-level:
-- `fn regex` — `OnceLock`-backed regex factory (`regex!` macro wraps this).
-- `struct Parse<'z, Tz2>` (lines 17–22)
-  - fields: `tz`, `default_time`, `prefer_dmy`.
-- `impl<'z, Tz2> Parse<'z, Tz2>` (lines 24–681). Methods, in dispatch order:
+## `src/datetime.rs` — the core
+Top-level (above `struct Parse`):
+- `regex!` macro — `OnceLock`-backed regex factory, `.unicode(false)`.
+- `build_date_byte_table()` (const fn) — builds the 256-entry `DATE_BYTE` LUT.
+- `static DATE_BYTE: [bool; 256]` — valid date bytes (alnum, ASCII ws, `- + / : . ,`).
+- `fn cannot_be_date(input)` — whole-input structural pre-filter; bails before
+  the dispatch chain when any byte cannot appear in a date (`_`, `#`, non-ASCII…).
 
-  | Method | Lines | Notes |
-  |---|---|---|
-  | `new`                 | 28–36   | constructor |
-  | `new_with_preference` | 43–55   | constructor + DMY flag |
-  | `prefer_dmy`          | 38–41   | setter |
-  | `parse`               | 57–70   | top-level dispatch (see parse order) |
-  | `ymd_family`          | 72–87   | rfc3339 first, then ymd variants |
-  | `month_mdy_family`    | 89–101  | |
-  | `month_dmy_family`    | 103–112 | |
-  | `slash_mdy_family`    | 114–132 | |
-  | `slash_ymd_family`    | 134–141 | |
-  | `unix_timestamp`      | 143–160 | uses `fast_float2` |
-  | `rfc3339`             | 162–171 | `DateTime::parse_from_rfc3339` |
-  | `rfc2822`             | 173–181 | |
-  | `ymd_hms`             | 183–210 | |
-  | `ymd_hms_z`           | 212–247 | pre-filter: `len<17` or byte[10] not ws |
-  | `ymd`                 | 249–269 | |
-  | `ymd_z`               | 271–303 | |
-  | `month_ymd`           | 305–326 | |
-  | `month_mdy_hms`       | 328–354 | |
-  | `month_mdy_hms_z`     | 356–403 | pre-filter: `len<20` + `has_year` scan |
-  | `month_mdy`           | 405–435 | |
-  | `month_dmy_hms`       | 437–464 | pre-filter: no `:` short-circuit |
-  | `month_dmy`           | 466–502 | pre-filter: 4-digit trailing year |
-  | `slash_mdy_hms`       | 504–540 | |
-  | `slash_dmy_hms`       | 542–578 | |
-  | `slash_mdy`           | 580–604 | |
-  | `slash_dmy`           | 606–630 | |
-  | `slash_ymd_hms`       | 632–657 | |
-  | `slash_ymd`           | 659–680 | |
+- `struct Parse<'z, Tz2>` — fields `tz`, `default_time`, `prefer_dmy`.
+- `impl<'z, Tz2> Parse<'z, Tz2>`. Methods of note:
+  - `new`, `new_with_preference`, `prefer_dmy` — constructors/setter.
+  - `parse` — top-level dispatch. Runs `cannot_be_date` first, then the
+    `or_else` chain (see Parse Order below).
+  - Family dispatchers: `ymd_family` (rfc3339 first), `month_mdy_family`,
+    `month_dmy_family`, `slash_mdy_family`, `slash_ymd_family`.
+  - Ungated parsers (run last): `unix_timestamp` (`fast_float2`), `rfc2822`.
+  - Leaf parsers: `rfc3339`, `ymd_hms`, `ymd_hms_z`, `ymd`, `ymd_z`,
+    `month_ymd`, `month_mdy_hms`, `month_mdy_hms_z`, `month_mdy`,
+    `month_dmy_hms`, `month_dmy`, `slash_mdy_hms`, `slash_dmy_hms`,
+    `slash_mdy`, `slash_dmy`, `slash_ymd_hms`, `slash_ymd`.
+  - Leaf pre-filters (cheap byte checks before the heavy parse): `ymd_hms_z`
+    (`len<17` or byte[10] not ws); `month_mdy_hms_z` (`len<20` + `has_year`
+    scan); `month_dmy_hms` (no `:` short-circuit); `month_dmy` (4-digit trailing
+    year); `unix_timestamp` (first byte must be digit/`+`/`-`/`.`/`i`/`I`/`n`/`N`
+    — the only leads `fast_float2` accepts); `rfc2822` (must contain `:`, since
+    every RFC2822 datetime has a time-of-day).
 - `mod tests` — extensive per-parser unit tests.
 
+## Parse Order (current)
+`cannot_be_date` gate → slash_mdy_family → slash_ymd_family →
+ymd_family (rfc3339 first) → month_ymd → month_mdy_family → month_dmy_family →
+unix_timestamp → rfc2822.
+
+Reorder is result-preserving: floats match no family gate (so still reach
+`unix_timestamp`); rfc2822 inputs always carry a tz which the `$`-anchored
+`month_dmy_*` regexes reject, and `month_dmy_*` only succeeds without a tz which
+makes rfc2822 fail — the two are mutually exclusive.
+
 ## `src/timezone.rs` (~156 lines)
-Free functions:
-- `parse(s)` — entry point; resolves numeric offsets and named zones.
-- `parse_offset_2822(s)` — RFC2822-style offsets.
-- `parse_offset_internal(s)` — shared internal logic.
-- Helpers: `equals`, `colon_or_space`.
-- `mod tests`.
+- `parse(s)` — entry; numeric offsets + named zones.
+- `parse_offset_2822(s)`, `parse_offset_internal(s)`, helpers `equals`,
+  `colon_or_space`. `mod tests`.
 
-## `benches/parse.rs` (~109 lines)
-Criterion benches (`harness = false` in `Cargo.toml`). Bench group name is
-referenced by the `/bench-compare` skill.
-
-## `examples/`
-- `parse.rs`, `parse_with.rs`, `parse_with_timezone.rs`,
-  `convert_to_pacific.rs`, `str_parse_method.rs`.
+## `benches/parse.rs`
+Criterion benches (`harness = false`). Groups: `parse_all`, `parse_each`,
+`parse_failures` (non-date hot path: `category_value_N` strings, killed by the
+byte pre-filter), `parse_word_failures` (valid-byte word non-dates that run the
+full chain), `memory_usage`. Referenced by the `/bench-compare` skill.
 
 ## `.claude/`
 - `agents/performance-reviewer.md` — proactive perf reviewer for
   `src/datetime.rs`, `src/lib.rs`, `src/timezone.rs`.
-- `skills/bench-compare/` — `/bench-compare` skill.
-- `skills/release/` — `/release <version>` skill.
-- `settings.local.json` — local Claude settings (tracked, see `.gitignore`).
+- `skills/bench-compare/`, `skills/release/`.
+- `settings.local.json` — local Claude settings (tracked).
