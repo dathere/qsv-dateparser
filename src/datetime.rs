@@ -90,10 +90,12 @@ where
     /// more examples from [`Parse`], [`crate::parse()`] and [`crate::parse_with_timezone()`].
     ///
     /// Order rationale: the regex-gated families are tried first because their
-    /// `is_match` gate rejects non-matching inputs cheaply. The two *ungated*
-    /// parsers — `unix_timestamp` (runs `fast_float2`) and `rfc2822` (runs
-    /// `parse_from_rfc2822`) — run unconditionally on every input, so they are
-    /// tried last to avoid paying their cost on the common ISO/slash dates.
+    /// `is_match` gate rejects non-matching inputs cheaply. The two parsers
+    /// without a family regex gate — `unix_timestamp` (runs `fast_float2`) and
+    /// `rfc2822` (runs `parse_from_rfc2822`) — are tried last to avoid paying
+    /// their cost on the common ISO/slash dates. Each still applies its own cheap
+    /// byte pre-filter before the heavy parse (`unix_timestamp` checks the first
+    /// byte against the leads `fast_float2` accepts; `rfc2822` requires a `:`).
     ///
     /// This reorder is result-preserving:
     /// - A `fast_float2`-parseable input (pure number, or `inf`/`nan`) matches no
