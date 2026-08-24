@@ -849,8 +849,7 @@ mod tests {
         }
 
         // Pre-filter must NOT reject anything that currently parses. Spot-check
-        // every separator family plus the bare float specials accepted by the
-        // unix-timestamp path (all-ASCII letters, no digits).
+        // every separator family.
         for input in [
             "2021-04-30 21:14:10",           // '-' ':' space
             "2020-07-20+08:00",              // '+'
@@ -859,8 +858,6 @@ mod tests {
             "Wed, 02 Jun 2021 06:31:39 GMT", // rfc2822
             "1671673426.123456789",          // timestamp with '.'
             "-770172300",                    // negative timestamp
-            "inf",                           // fast_float2 special
-            "nan",                           // fast_float2 special
         ] {
             assert!(
                 super::parse(input).is_ok(),

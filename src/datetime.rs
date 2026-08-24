@@ -38,9 +38,8 @@ static DATE_BYTE: [bool; 256] = build_date_byte_table();
 /// Any byte outside [`DATE_BYTE`] (e.g. `_`, `#`, `(`, or any non-ASCII byte)
 /// means the input cannot be a date, so we can bail before running 5-6 failing
 /// regex probes. This is the common, hot case for non-date string columns. It is
-/// intentionally conservative: it rejects nothing that currently parses
-/// (including bare `inf`/`nan` unix-timestamp inputs, which are all-ASCII
-/// letters). The table collapses the per-byte test to a single load + branch.
+/// intentionally conservative: it rejects nothing that currently parses.
+/// The table collapses the per-byte test to a single load + branch.
 #[inline]
 fn cannot_be_date(input: &str) -> bool {
     input.bytes().any(|b| !DATE_BYTE[b as usize])
@@ -98,9 +97,10 @@ where
     /// byte against the leads `fast_float2` accepts; `rfc2822` requires a `:`).
     ///
     /// This reorder is result-preserving:
-    /// - A `fast_float2`-parseable input (pure number, or `inf`/`nan`) matches no
-    ///   family gate (they all require `/`, an interior `-`, or a letters+space
-    ///   shape a bare number lacks), so it still reaches `unix_timestamp`.
+    /// - A `fast_float2`-parseable input (a pure finite number; `inf`/`nan` are
+    ///   rejected as non-finite) matches no family gate (they all require `/`,
+    ///   an interior `-`, or a letters+space shape a bare number lacks), so it
+    ///   still reaches `unix_timestamp`.
     /// - An `rfc2822` input always carries a timezone, which makes the
     ///   `$`-anchored `month_dmy_*` regexes fail; conversely `month_dmy_*` only
     ///   succeeds without a timezone, which makes `rfc2822` fail. The two are
@@ -198,12 +198,14 @@ where
     // - 1671673426.123456789
     #[inline]
     fn unix_timestamp(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        // Cheap pre-filter before the heavier float parse: `fast_float2` only
-        // accepts inputs whose first byte is a digit, sign, dot, or the start of
-        // `inf`/`nan` (it rejects leading whitespace and empty input). This is the
-        // last-resort numeric parser, so most inputs reaching it are non-numeric.
+        // Cheap pre-filter before the heavier float parse: only finite numbers
+        // are accepted, so the first byte must be a digit, sign, or dot
+        // (`fast_float2` rejects leading whitespace and empty input; bare
+        // `inf`/`nan` are excluded here, matching the non-finite check below).
+        // This is the last-resort numeric parser, so most inputs reaching it
+        // are non-numeric.
         let &b0 = input.as_bytes().first()?;
-        if !(b0.is_ascii_digit() || matches!(b0, b'+' | b'-' | b'.' | b'i' | b'I' | b'n' | b'N')) {
+        if !(b0.is_ascii_digit() || matches!(b0, b'+' | b'-' | b'.')) {
             return None;
         }
 
@@ -212,6 +214,14 @@ where
         } else {
             return None;
         };
+
+        // Reject non-finite values (`+inf`, `-nan`, … pass the lead-byte filter
+        // above): the `as i64` cast below would otherwise turn `nan` into 0
+        // (1970-01-01) and `inf` into i64::MAX nanos (2262-04-11) — never the
+        // intended reading of the input.
+        if !ts_sec_val.is_finite() {
+            return None;
+        }
 
         // convert the timestamp seconds value to nanoseconds
         let ts_ns_val = ts_sec_val * 1_000_000_000_f64;
@@ -817,6 +827,16 @@ mod tests {
                 .is_some()
         );
         assert!(parse.unix_timestamp("not-a-ts").is_none());
+        // Non-finite floats must be rejected, whether caught by the lead-byte
+        // pre-filter (bare `inf`/`nan`) or the is_finite check (signed forms).
+        for input in [
+            "inf", "nan", "INF", "NaN", "infinity", "+inf", "-inf", "-nan",
+        ] {
+            assert!(
+                parse.unix_timestamp(input).is_none(),
+                "unix_timestamp must reject non-finite {input}"
+            );
+        }
     }
 
     #[test]
