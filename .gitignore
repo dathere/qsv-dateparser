@@ -17,3 +17,4 @@ dateparser/.vscode/launch.json
 
 # Allow Claude Code shared settings to be tracked
 !.claude/settings.local.json
+*.log
