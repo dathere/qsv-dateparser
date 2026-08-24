@@ -204,7 +204,6 @@ pub mod timezone;
 use crate::datetime::Parse;
 use anyhow::{Error, Result};
 use chrono::prelude::*;
-use std::sync::OnceLock;
 
 /// `DateTimeUtc` is an alias for `chrono`'s `DateTime<UTC>`. It implements `std::str::FromStr`'s
 /// `from_str` method, and it makes `str`'s `parse` method to understand the accepted date formats
@@ -229,7 +228,7 @@ impl std::str::FromStr for DateTimeUtc {
     }
 }
 
-static MIDNIGHT: OnceLock<chrono::NaiveTime> = OnceLock::new();
+const MIDNIGHT: NaiveTime = NaiveTime::MIN;
 
 /// This function tries to recognize the input datetime string with a list of accepted formats.
 /// When timezone is not provided, this function assumes it's a [`chrono::Local`] datetime. For
@@ -245,8 +244,7 @@ pub fn parse(input: &str) -> Result<DateTime<Utc>> {
 /// parses them using an MDY format.
 #[inline]
 pub fn parse_with_preference(input: &str, dmy_preference: bool) -> Result<DateTime<Utc>> {
-    let midnight = MIDNIGHT.get_or_init(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-    Parse::new_with_preference(&Utc, *midnight, dmy_preference).parse(input)
+    Parse::new_with_preference(&Utc, MIDNIGHT, dmy_preference).parse(input)
 }
 
 /// Similar to [`parse()`], this function takes a datetime string and a custom [`chrono::TimeZone`],
@@ -269,8 +267,7 @@ pub fn parse_with_preference_and_timezone<Tz2: TimeZone>(
     dmy_preference: bool,
     tz: &Tz2,
 ) -> Result<DateTime<Utc>> {
-    let midnight = MIDNIGHT.get_or_init(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-    Parse::new_with_preference(tz, *midnight, dmy_preference).parse(input)
+    Parse::new_with_preference(tz, MIDNIGHT, dmy_preference).parse(input)
 }
 
 /// Similar to [`parse()`] and [`parse_with_timezone()`], this function takes a datetime string, a
