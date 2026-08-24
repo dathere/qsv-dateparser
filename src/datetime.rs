@@ -7,11 +7,11 @@ use regex::Regex;
 macro_rules! regex {
     ($re:literal $(,)?) => {{
         static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        RE.get_or_init(|| unsafe {
+        RE.get_or_init(|| {
             regex::RegexBuilder::new($re)
                 .unicode(false)
                 .build()
-                .unwrap_unchecked()
+                .expect("invalid regex literal")
         })
     }};
 }
