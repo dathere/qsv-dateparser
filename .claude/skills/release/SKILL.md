@@ -46,10 +46,11 @@ Stop if there are any warnings — do not proceed to commit.
 
 ### 8. Stage and commit
 ```bash
-git add Cargo.toml Cargo.lock
+git add Cargo.toml
 git commit -m "<version> release"
 ```
 The commit message format matches the project convention (e.g. `0.13.0 release`).
+Note: `Cargo.lock` is gitignored (library-crate convention) — do not stage it.
 
 ### 9. Create an annotated tag
 ```bash
@@ -70,3 +71,18 @@ Then tell the user:
 > cargo publish
 > ```
 > These are NOT run automatically — confirm before pushing.
+
+### 11. Create GitHub release notes (REQUIRED — after the user confirms push/publish)
+Once the tag is pushed and the crate is published, ALWAYS create a GitHub release:
+
+1. Review the changes since the previous tag (`git log <prev-tag>..<version> --oneline`).
+2. Write detailed markdown notes matching the style of prior releases
+   (`gh release view <prev-tag> --repo dathere/qsv-dateparser`): sectioned by
+   theme (behavior changes, safety, performance, housekeeping), with a
+   benchmark table when perf changed, and a "why it matters for qsv" angle
+   where relevant. Never include session/chat links.
+3. Publish it:
+```bash
+gh release create <version> --repo dathere/qsv-dateparser --title "<version>" --notes-file <notes-file>
+```
+Do not consider the release complete until the GitHub release exists.
