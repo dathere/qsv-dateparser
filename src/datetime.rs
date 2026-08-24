@@ -45,6 +45,33 @@ fn cannot_be_date(input: &str) -> bool {
     input.bytes().any(|b| !DATE_BYTE[b as usize])
 }
 
+/// Returns true when the year field of a slash-separated date (the digits
+/// after the second `/`) is exactly 2 digits wide. Callers' regexes guarantee
+/// the `d{1,2}/d{1,2}/d{2,4}` shape, but the scan is panic-free regardless.
+///
+/// Used to dispatch between the `%y` and `%Y` chrono format families: `%y`
+/// consumes at most 2 digits, so it always fails on 3-4 digit years, and `%Y`
+/// is never reached on a 2-digit year that `%y` accepts (both families apply
+/// identical date-validity rules), so picking one family by year width is
+/// result-preserving and halves the trial-parse chain.
+#[inline]
+fn slash_year_is_two_digits(bytes: &[u8]) -> bool {
+    let mut slashes = 0u8;
+    let mut year_len = 0usize;
+    for &b in bytes {
+        if b == b'/' {
+            slashes += 1;
+        } else if slashes == 2 {
+            if b.is_ascii_digit() {
+                year_len += 1;
+            } else {
+                break;
+            }
+        }
+    }
+    year_len == 2
+}
+
 /// Parse struct has methods implemented parsers for accepted formats.
 pub struct Parse<'z, Tz2> {
     tz: &'z Tz2,
@@ -626,17 +653,33 @@ where
             return None;
         }
 
+        // Dispatch on year width (see slash_year_is_two_digits) instead of
+        // trying all 10 formats: 4-digit years previously burned 5 guaranteed-
+        // failing %y attempts before the first %Y one could succeed.
+        let (fmt_hms, fmt_hm, fmt_hms_f, fmt_ims_p, fmt_im_p) =
+            if slash_year_is_two_digits(input.as_bytes()) {
+                (
+                    "%m/%d/%y %H:%M:%S",
+                    "%m/%d/%y %H:%M",
+                    "%m/%d/%y %H:%M:%S%.f",
+                    "%m/%d/%y %I:%M:%S %P",
+                    "%m/%d/%y %I:%M %P",
+                )
+            } else {
+                (
+                    "%m/%d/%Y %H:%M:%S",
+                    "%m/%d/%Y %H:%M",
+                    "%m/%d/%Y %H:%M:%S%.f",
+                    "%m/%d/%Y %I:%M:%S %P",
+                    "%m/%d/%Y %I:%M %P",
+                )
+            };
         self.tz
-            .datetime_from_str(input, "%m/%d/%y %H:%M:%S")
-            .or_else(|_| self.tz.datetime_from_str(input, "%m/%d/%y %H:%M"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%m/%d/%y %H:%M:%S%.f"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%m/%d/%y %I:%M:%S %P"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%m/%d/%y %I:%M %P"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%m/%d/%Y %H:%M:%S"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%m/%d/%Y %H:%M"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%m/%d/%Y %H:%M:%S%.f"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%m/%d/%Y %I:%M:%S %P"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%m/%d/%Y %I:%M %P"))
+            .datetime_from_str(input, fmt_hms)
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_hm))
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_hms_f))
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_ims_p))
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_im_p))
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -664,17 +707,31 @@ where
             return None;
         }
 
+        // Dispatch on year width — see the twin comment in slash_mdy_hms.
+        let (fmt_hms, fmt_hm, fmt_hms_f, fmt_ims_p, fmt_im_p) =
+            if slash_year_is_two_digits(input.as_bytes()) {
+                (
+                    "%d/%m/%y %H:%M:%S",
+                    "%d/%m/%y %H:%M",
+                    "%d/%m/%y %H:%M:%S%.f",
+                    "%d/%m/%y %I:%M:%S %P",
+                    "%d/%m/%y %I:%M %P",
+                )
+            } else {
+                (
+                    "%d/%m/%Y %H:%M:%S",
+                    "%d/%m/%Y %H:%M",
+                    "%d/%m/%Y %H:%M:%S%.f",
+                    "%d/%m/%Y %I:%M:%S %P",
+                    "%d/%m/%Y %I:%M %P",
+                )
+            };
         self.tz
-            .datetime_from_str(input, "%d/%m/%y %H:%M:%S")
-            .or_else(|_| self.tz.datetime_from_str(input, "%d/%m/%y %H:%M"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%d/%m/%y %H:%M:%S%.f"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%d/%m/%y %I:%M:%S %P"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%d/%m/%y %I:%M %P"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%d/%m/%Y %H:%M:%S"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%d/%m/%Y %H:%M"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%d/%m/%Y %H:%M:%S%.f"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%d/%m/%Y %I:%M:%S %P"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%d/%m/%Y %I:%M %P"))
+            .datetime_from_str(input, fmt_hms)
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_hm))
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_hms_f))
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_ims_p))
+            .or_else(|_| self.tz.datetime_from_str(input, fmt_im_p))
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -697,8 +754,12 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
-        NaiveDate::parse_from_str(input, "%m/%d/%y")
-            .or_else(|_| NaiveDate::parse_from_str(input, "%m/%d/%Y"))
+        let fmt = if slash_year_is_two_digits(input.as_bytes()) {
+            "%m/%d/%y"
+        } else {
+            "%m/%d/%Y"
+        };
+        NaiveDate::parse_from_str(input, fmt)
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
@@ -723,8 +784,12 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
-        NaiveDate::parse_from_str(input, "%d/%m/%y")
-            .or_else(|_| NaiveDate::parse_from_str(input, "%d/%m/%Y"))
+        let fmt = if slash_year_is_two_digits(input.as_bytes()) {
+            "%d/%m/%y"
+        } else {
+            "%d/%m/%Y"
+        };
+        NaiveDate::parse_from_str(input, fmt)
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
