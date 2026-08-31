@@ -144,6 +144,57 @@ fn tz_suffix(input: &str, prefix_end: usize, require_ws: bool) -> Option<&str> {
         .then_some(token)
 }
 
+/// Scratch space for the month-name parsers, which must strip separators from
+/// the input before handing it to chrono.
+///
+/// Comfortably covers every shape those regexes accept in practice — the
+/// longest realistic input, `September 17, 2012 at 10:09am PST`, is 33 bytes.
+/// The patterns allow unbounded runs of whitespace, so a pathological input can
+/// still exceed this; that falls back to allocating, which makes the size a
+/// performance choice rather than a correctness one.
+const NORMALIZE_SCRATCH: usize = 64;
+
+/// Copies `input` into `buf`, dropping every byte in `strip`, and then removes
+/// the first `"at"` when `drop_at` is set.
+///
+/// This replaces `String::replace`, whose allocation cost 56 ns of
+/// `month_mdy_hms_z` — comparable to the entire format parse. Returns `None`
+/// when the input does not fit, leaving the caller to allocate as before.
+///
+/// The `"at"` removal deliberately mirrors `String::find`, which matches the
+/// first occurrence anywhere rather than only a standalone word. No month name
+/// or abbreviation contains a lowercase `at`, so the two agree on every input
+/// the callers' regexes admit, but keeping the behaviour identical avoids
+/// having to prove that separately.
+#[inline]
+fn normalize_into<'b>(
+    input: &str,
+    buf: &'b mut [u8; NORMALIZE_SCRATCH],
+    strip: &[u8],
+    drop_at: bool,
+) -> Option<&'b str> {
+    if input.len() > buf.len() {
+        return None;
+    }
+
+    let mut n = 0;
+    for &b in input.as_bytes() {
+        if !strip.contains(&b) {
+            buf[n] = b;
+            n += 1;
+        }
+    }
+
+    if drop_at && let Some(pos) = buf[..n].windows(2).position(|w| w == b"at") {
+        buf.copy_within(pos + 2..n, pos);
+        n -= 2;
+    }
+
+    // Only whole ASCII bytes are ever dropped, so this cannot split a
+    // multi-byte character; the check is a cheap way to say so without unsafe.
+    std::str::from_utf8(&buf[..n]).ok()
+}
+
 /// Which format a date-time input's time-of-day portion dispatches to.
 ///
 /// These are parse-dispatch buckets, not an exhaustive account of what the
@@ -708,20 +759,28 @@ where
         // is equivalent to the previous `replace(", ", " ").replace(". ", " ")` for all
         // inputs that reach this point — marginally-malformed inputs (e.g. "May 27,2012 …")
         // still fail to parse after stripping because the digits run together.
-        let dt = input.replace([',', '.'], "");
+        let mut buf = [0_u8; NORMALIZE_SCRATCH];
+        let fallback;
+        let dt = match normalize_into(input, &mut buf, b",.", false) {
+            Some(s) => s,
+            None => {
+                fallback = input.replace([',', '.'], "");
+                fallback.as_str()
+            }
+        };
         // Classify `dt`, not `input`: the regex admits a period after an
         // abbreviated month ("Sept. 17, 2012"), which would otherwise read as
         // fractional seconds. This family's regex has no fractional-seconds
         // group at all, and the strip removes any period regardless, so the
         // two fraction-bearing shapes cannot occur — and never had a format.
-        let items = match time_shape(&dt) {
+        let items = match time_shape(dt) {
             TimeShape::Hms => fmt_items!("%B %d %Y %H:%M:%S"),
             TimeShape::Hm => fmt_items!("%B %d %Y %H:%M"),
             TimeShape::ImsP => fmt_items!("%B %d %Y %I:%M:%S %P"),
             TimeShape::ImP => fmt_items!("%B %d %Y %I:%M %P"),
             TimeShape::HmsF | TimeShape::HmsFP => return None,
         };
-        self.dt_from_items(&dt, items)
+        self.dt_from_items(dt, items)
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -769,14 +828,23 @@ where
             let parse_from_str = Self::naive_dt_from_items;
             return match timezone::parse(tz) {
                 Ok(offset) => {
-                    let mut dt = input.replace(',', "");
-                    if let Some(pos) = dt.find("at") {
-                        dt.replace_range(pos..pos + 2, "");
-                    }
-                    parse_from_str(&dt, fmt_items!("%B %d %Y %H:%M:%S %Z"))
-                        .or_else(|_| parse_from_str(&dt, fmt_items!("%B %d %Y %H:%M %Z")))
-                        .or_else(|_| parse_from_str(&dt, fmt_items!("%B %d %Y %I:%M:%S %P %Z")))
-                        .or_else(|_| parse_from_str(&dt, fmt_items!("%B %d %Y %I:%M %P %Z")))
+                    let mut buf = [0_u8; NORMALIZE_SCRATCH];
+                    let fallback;
+                    let dt: &str = match normalize_into(input, &mut buf, b",", true) {
+                        Some(s) => s,
+                        None => {
+                            let mut owned = input.replace(',', "");
+                            if let Some(pos) = owned.find("at") {
+                                owned.replace_range(pos..pos + 2, "");
+                            }
+                            fallback = owned;
+                            fallback.as_str()
+                        }
+                    };
+                    parse_from_str(dt, fmt_items!("%B %d %Y %H:%M:%S %Z"))
+                        .or_else(|_| parse_from_str(dt, fmt_items!("%B %d %Y %H:%M %Z")))
+                        .or_else(|_| parse_from_str(dt, fmt_items!("%B %d %Y %I:%M:%S %P %Z")))
+                        .or_else(|_| parse_from_str(dt, fmt_items!("%B %d %Y %I:%M %P %Z")))
                         .ok()
                         .and_then(|parsed| offset.from_local_datetime(&parsed).single())
                         .map(|datetime| datetime.with_timezone(&Utc))
@@ -810,9 +878,17 @@ where
         // The regex above enforces \s+ after any comma or period, so removing bare ',' or '.'
         // is equivalent to the previous `replace(", ", " ").replace(". ", " ")` for all
         // inputs that reach this point.
-        let dt = input.replace([',', '.'], "");
-        Self::naive_date_from_items(&dt, fmt_items!("%B %d %y"))
-            .or_else(|_| Self::naive_date_from_items(&dt, fmt_items!("%B %d %Y")))
+        let mut buf = [0_u8; NORMALIZE_SCRATCH];
+        let fallback;
+        let dt = match normalize_into(input, &mut buf, b",.", false) {
+            Some(s) => s,
+            None => {
+                fallback = input.replace([',', '.'], "");
+                fallback.as_str()
+            }
+        };
+        Self::naive_date_from_items(dt, fmt_items!("%B %d %y"))
+            .or_else(|_| Self::naive_date_from_items(dt, fmt_items!("%B %d %Y")))
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
@@ -837,18 +913,26 @@ where
             return None;
         }
 
-        let dt = input.replace(',', "");
+        let mut buf = [0_u8; NORMALIZE_SCRATCH];
+        let fallback;
+        let dt = match normalize_into(input, &mut buf, b",", false) {
+            Some(s) => s,
+            None => {
+                fallback = input.replace(',', "");
+                fallback.as_str()
+            }
+        };
         // This family's regex has no am/pm alternative, so the AM/PM shapes
         // cannot occur here. The chain previously ended in `%I:%M:%S %P` and
         // `%I:%M %P`, which were therefore unreachable; dropping them changes
         // no result.
-        let items = match time_shape(&dt) {
+        let items = match time_shape(dt) {
             TimeShape::Hms => fmt_items!("%d %B %Y %H:%M:%S"),
             TimeShape::Hm => fmt_items!("%d %B %Y %H:%M"),
             TimeShape::HmsF => fmt_items!("%d %B %Y %H:%M:%S%.f"),
             TimeShape::ImP | TimeShape::ImsP | TimeShape::HmsFP => return None,
         };
-        self.dt_from_items(&dt, items)
+        self.dt_from_items(dt, items)
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
