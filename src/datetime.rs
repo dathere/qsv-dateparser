@@ -74,6 +74,72 @@ fn cannot_be_date(input: &str) -> bool {
     input.bytes().any(|b| !DATE_BYTE[b as usize])
 }
 
+/// Which time-of-day format a date-time input carries.
+///
+/// Every family whose regex ends in
+/// `\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?\s*(?:am|pm|AM|PM)?` admits exactly
+/// these shapes, and each one is matched by at most a single format string.
+/// Classifying up front therefore replaces a chain of up to five trial parses
+/// — of which all but the last are guaranteed to fail — with one attempt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TimeShape {
+    /// `hh:mm`
+    Hm,
+    /// `hh:mm:ss`
+    Hms,
+    /// `hh:mm:ss.fff`
+    HmsF,
+    /// `hh:mm AM/PM`
+    ImP,
+    /// `hh:mm:ss AM/PM`
+    ImsP,
+    /// Fractional seconds *and* an AM/PM marker. No format string in any
+    /// family covers this, so every caller maps it to `None` — matching the
+    /// pre-existing behaviour, where the chain simply ran out of formats.
+    HmsFP,
+}
+
+/// Classifies the time-of-day portion of an input that has already passed a
+/// family regex, from a single byte scan.
+///
+/// Callers pass the exact string they are about to hand to the parser, not the
+/// raw input: `month_mdy_hms` and `month_dmy_hms` strip `,` and `.` first, and
+/// classifying before that would mistake the period in `Sept. 17, 2012` for
+/// fractional seconds.
+///
+/// A colon count of 2 distinguishes `%H:%M:%S` from `%H:%M`; the callers'
+/// regexes cap the time at two colons and admit none anywhere else. The AM/PM
+/// marker can only ever be the final two bytes, and chrono's `%P` is
+/// case-insensitive, so a single `| 32` comparison covers `am`/`AM`/`Am`.
+#[inline]
+fn time_shape(input: &str) -> TimeShape {
+    let bytes = input.as_bytes();
+
+    let ampm = bytes.len() >= 2 && {
+        let [.., ap, m] = bytes else { unreachable!() };
+        m | 32 == b'm' && matches!(ap | 32, b'a' | b'p')
+    };
+
+    let mut colons = 0_u8;
+    let mut fraction = false;
+    for &b in bytes {
+        match b {
+            b':' => colons += 1,
+            b'.' => fraction = true,
+            _ => {}
+        }
+    }
+
+    match (colons >= 2, fraction, ampm) {
+        (true, true, true) => TimeShape::HmsFP,
+        (true, true, false) => TimeShape::HmsF,
+        (true, false, true) => TimeShape::ImsP,
+        (true, false, false) => TimeShape::Hms,
+        (false, _, true) => TimeShape::ImP,
+        (false, _, false) => TimeShape::Hm,
+    }
+}
+
 /// Returns true when the year field of a slash-separated date (the digits
 /// after the second `/`) is exactly 2 digits wide. Callers' regexes guarantee
 /// the `d{1,2}/d{1,2}/d{2,4}` shape, but the scan is panic-free regardless.
@@ -368,31 +434,22 @@ where
 
         // Byte 10 is the date/time separator. The regex guarantees the input
         // has at least 16 bytes and that byte 10 is either 'T' or ASCII
-        // whitespace, so picking the format-string family on this single byte
-        // avoids doubling the trial-parse chain for the common space case.
-        let (fmt_hms, fmt_hm, fmt_hms_f, fmt_ims_p, fmt_im_p) = if input.as_bytes()[10] == b'T' {
-            (
-                fmt_items!("%Y-%m-%dT%H:%M:%S"),
-                fmt_items!("%Y-%m-%dT%H:%M"),
-                fmt_items!("%Y-%m-%dT%H:%M:%S%.f"),
-                fmt_items!("%Y-%m-%dT%I:%M:%S %P"),
-                fmt_items!("%Y-%m-%dT%I:%M %P"),
-            )
-        } else {
-            (
-                fmt_items!("%Y-%m-%d %H:%M:%S"),
-                fmt_items!("%Y-%m-%d %H:%M"),
-                fmt_items!("%Y-%m-%d %H:%M:%S%.f"),
-                fmt_items!("%Y-%m-%d %I:%M:%S %P"),
-                fmt_items!("%Y-%m-%d %I:%M %P"),
-            )
+        // whitespace, so the single byte picks the format family.
+        let items = match (input.as_bytes()[10] == b'T', time_shape(input)) {
+            (true, TimeShape::Hms) => fmt_items!("%Y-%m-%dT%H:%M:%S"),
+            (true, TimeShape::Hm) => fmt_items!("%Y-%m-%dT%H:%M"),
+            (true, TimeShape::HmsF) => fmt_items!("%Y-%m-%dT%H:%M:%S%.f"),
+            (true, TimeShape::ImsP) => fmt_items!("%Y-%m-%dT%I:%M:%S %P"),
+            (true, TimeShape::ImP) => fmt_items!("%Y-%m-%dT%I:%M %P"),
+            (false, TimeShape::Hms) => fmt_items!("%Y-%m-%d %H:%M:%S"),
+            (false, TimeShape::Hm) => fmt_items!("%Y-%m-%d %H:%M"),
+            (false, TimeShape::HmsF) => fmt_items!("%Y-%m-%d %H:%M:%S%.f"),
+            (false, TimeShape::ImsP) => fmt_items!("%Y-%m-%d %I:%M:%S %P"),
+            (false, TimeShape::ImP) => fmt_items!("%Y-%m-%d %I:%M %P"),
+            (_, TimeShape::HmsFP) => return None,
         };
 
-        self.dt_from_items(input, fmt_hms)
-            .or_else(|_| self.dt_from_items(input, fmt_hm))
-            .or_else(|_| self.dt_from_items(input, fmt_hms_f))
-            .or_else(|_| self.dt_from_items(input, fmt_ims_p))
-            .or_else(|_| self.dt_from_items(input, fmt_im_p))
+        self.dt_from_items(input, items)
             .ok()
             .map(|parsed| parsed.with_timezone(&Utc))
             .map(Ok)
@@ -532,10 +589,19 @@ where
         // inputs that reach this point — marginally-malformed inputs (e.g. "May 27,2012 …")
         // still fail to parse after stripping because the digits run together.
         let dt = input.replace([',', '.'], "");
-        self.dt_from_items(&dt, fmt_items!("%B %d %Y %H:%M:%S"))
-            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%B %d %Y %H:%M")))
-            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%B %d %Y %I:%M:%S %P")))
-            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%B %d %Y %I:%M %P")))
+        // Classify `dt`, not `input`: the regex admits a period after an
+        // abbreviated month ("Sept. 17, 2012"), which would otherwise read as
+        // fractional seconds. This family's regex has no fractional-seconds
+        // group at all, and the strip removes any period regardless, so the
+        // two fraction-bearing shapes cannot occur — and never had a format.
+        let items = match time_shape(&dt) {
+            TimeShape::Hms => fmt_items!("%B %d %Y %H:%M:%S"),
+            TimeShape::Hm => fmt_items!("%B %d %Y %H:%M"),
+            TimeShape::ImsP => fmt_items!("%B %d %Y %I:%M:%S %P"),
+            TimeShape::ImP => fmt_items!("%B %d %Y %I:%M %P"),
+            TimeShape::HmsF | TimeShape::HmsFP => return None,
+        };
+        self.dt_from_items(&dt, items)
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -640,11 +706,17 @@ where
         }
 
         let dt = input.replace(',', "");
-        self.dt_from_items(&dt, fmt_items!("%d %B %Y %H:%M:%S"))
-            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%d %B %Y %H:%M")))
-            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%d %B %Y %H:%M:%S%.f")))
-            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%d %B %Y %I:%M:%S %P")))
-            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%d %B %Y %I:%M %P")))
+        // This family's regex has no am/pm alternative, so the AM/PM shapes
+        // cannot occur here. The chain previously ended in `%I:%M:%S %P` and
+        // `%I:%M %P`, which were therefore unreachable; dropping them changes
+        // no result.
+        let items = match time_shape(&dt) {
+            TimeShape::Hms => fmt_items!("%d %B %Y %H:%M:%S"),
+            TimeShape::Hm => fmt_items!("%d %B %Y %H:%M"),
+            TimeShape::HmsF => fmt_items!("%d %B %Y %H:%M:%S%.f"),
+            TimeShape::ImP | TimeShape::ImsP | TimeShape::HmsFP => return None,
+        };
+        self.dt_from_items(&dt, items)
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -710,32 +782,27 @@ where
             return None;
         }
 
-        // Dispatch on year width (see slash_year_is_two_digits) instead of
-        // trying all 10 formats: 4-digit years previously burned 5 guaranteed-
-        // failing %y attempts before the first %Y one could succeed.
-        let (fmt_hms, fmt_hm, fmt_hms_f, fmt_ims_p, fmt_im_p) =
-            if slash_year_is_two_digits(input.as_bytes()) {
-                (
-                    fmt_items!("%m/%d/%y %H:%M:%S"),
-                    fmt_items!("%m/%d/%y %H:%M"),
-                    fmt_items!("%m/%d/%y %H:%M:%S%.f"),
-                    fmt_items!("%m/%d/%y %I:%M:%S %P"),
-                    fmt_items!("%m/%d/%y %I:%M %P"),
-                )
-            } else {
-                (
-                    fmt_items!("%m/%d/%Y %H:%M:%S"),
-                    fmt_items!("%m/%d/%Y %H:%M"),
-                    fmt_items!("%m/%d/%Y %H:%M:%S%.f"),
-                    fmt_items!("%m/%d/%Y %I:%M:%S %P"),
-                    fmt_items!("%m/%d/%Y %I:%M %P"),
-                )
-            };
-        self.dt_from_items(input, fmt_hms)
-            .or_else(|_| self.dt_from_items(input, fmt_hm))
-            .or_else(|_| self.dt_from_items(input, fmt_hms_f))
-            .or_else(|_| self.dt_from_items(input, fmt_ims_p))
-            .or_else(|_| self.dt_from_items(input, fmt_im_p))
+        // Dispatch on year width (see slash_year_is_two_digits) and on the
+        // time shape (see time_shape) instead of trying all 10 formats. This
+        // picks the one format that can match, so `MM/DD/YYYY hh:mm:ss AM/PM`
+        // no longer burns three guaranteed-failing attempts before the fourth.
+        let items = match (
+            slash_year_is_two_digits(input.as_bytes()),
+            time_shape(input),
+        ) {
+            (true, TimeShape::Hms) => fmt_items!("%m/%d/%y %H:%M:%S"),
+            (true, TimeShape::Hm) => fmt_items!("%m/%d/%y %H:%M"),
+            (true, TimeShape::HmsF) => fmt_items!("%m/%d/%y %H:%M:%S%.f"),
+            (true, TimeShape::ImsP) => fmt_items!("%m/%d/%y %I:%M:%S %P"),
+            (true, TimeShape::ImP) => fmt_items!("%m/%d/%y %I:%M %P"),
+            (false, TimeShape::Hms) => fmt_items!("%m/%d/%Y %H:%M:%S"),
+            (false, TimeShape::Hm) => fmt_items!("%m/%d/%Y %H:%M"),
+            (false, TimeShape::HmsF) => fmt_items!("%m/%d/%Y %H:%M:%S%.f"),
+            (false, TimeShape::ImsP) => fmt_items!("%m/%d/%Y %I:%M:%S %P"),
+            (false, TimeShape::ImP) => fmt_items!("%m/%d/%Y %I:%M %P"),
+            (_, TimeShape::HmsFP) => return None,
+        };
+        self.dt_from_items(input, items)
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -763,30 +830,25 @@ where
             return None;
         }
 
-        // Dispatch on year width — see the twin comment in slash_mdy_hms.
-        let (fmt_hms, fmt_hm, fmt_hms_f, fmt_ims_p, fmt_im_p) =
-            if slash_year_is_two_digits(input.as_bytes()) {
-                (
-                    fmt_items!("%d/%m/%y %H:%M:%S"),
-                    fmt_items!("%d/%m/%y %H:%M"),
-                    fmt_items!("%d/%m/%y %H:%M:%S%.f"),
-                    fmt_items!("%d/%m/%y %I:%M:%S %P"),
-                    fmt_items!("%d/%m/%y %I:%M %P"),
-                )
-            } else {
-                (
-                    fmt_items!("%d/%m/%Y %H:%M:%S"),
-                    fmt_items!("%d/%m/%Y %H:%M"),
-                    fmt_items!("%d/%m/%Y %H:%M:%S%.f"),
-                    fmt_items!("%d/%m/%Y %I:%M:%S %P"),
-                    fmt_items!("%d/%m/%Y %I:%M %P"),
-                )
-            };
-        self.dt_from_items(input, fmt_hms)
-            .or_else(|_| self.dt_from_items(input, fmt_hm))
-            .or_else(|_| self.dt_from_items(input, fmt_hms_f))
-            .or_else(|_| self.dt_from_items(input, fmt_ims_p))
-            .or_else(|_| self.dt_from_items(input, fmt_im_p))
+        // Dispatch on year width and time shape — see the twin comment in
+        // slash_mdy_hms.
+        let items = match (
+            slash_year_is_two_digits(input.as_bytes()),
+            time_shape(input),
+        ) {
+            (true, TimeShape::Hms) => fmt_items!("%d/%m/%y %H:%M:%S"),
+            (true, TimeShape::Hm) => fmt_items!("%d/%m/%y %H:%M"),
+            (true, TimeShape::HmsF) => fmt_items!("%d/%m/%y %H:%M:%S%.f"),
+            (true, TimeShape::ImsP) => fmt_items!("%d/%m/%y %I:%M:%S %P"),
+            (true, TimeShape::ImP) => fmt_items!("%d/%m/%y %I:%M %P"),
+            (false, TimeShape::Hms) => fmt_items!("%d/%m/%Y %H:%M:%S"),
+            (false, TimeShape::Hm) => fmt_items!("%d/%m/%Y %H:%M"),
+            (false, TimeShape::HmsF) => fmt_items!("%d/%m/%Y %H:%M:%S%.f"),
+            (false, TimeShape::ImsP) => fmt_items!("%d/%m/%Y %I:%M:%S %P"),
+            (false, TimeShape::ImP) => fmt_items!("%d/%m/%Y %I:%M %P"),
+            (_, TimeShape::HmsFP) => return None,
+        };
+        self.dt_from_items(input, items)
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -868,11 +930,15 @@ where
             return None;
         }
 
-        self.dt_from_items(input, fmt_items!("%Y/%m/%d %H:%M:%S"))
-            .or_else(|_| self.dt_from_items(input, fmt_items!("%Y/%m/%d %H:%M")))
-            .or_else(|_| self.dt_from_items(input, fmt_items!("%Y/%m/%d %H:%M:%S%.f")))
-            .or_else(|_| self.dt_from_items(input, fmt_items!("%Y/%m/%d %I:%M:%S %P")))
-            .or_else(|_| self.dt_from_items(input, fmt_items!("%Y/%m/%d %I:%M %P")))
+        let items = match time_shape(input) {
+            TimeShape::Hms => fmt_items!("%Y/%m/%d %H:%M:%S"),
+            TimeShape::Hm => fmt_items!("%Y/%m/%d %H:%M"),
+            TimeShape::HmsF => fmt_items!("%Y/%m/%d %H:%M:%S%.f"),
+            TimeShape::ImsP => fmt_items!("%Y/%m/%d %I:%M:%S %P"),
+            TimeShape::ImP => fmt_items!("%Y/%m/%d %I:%M %P"),
+            TimeShape::HmsFP => return None,
+        };
+        self.dt_from_items(input, items)
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -1604,6 +1670,32 @@ mod tests {
         assert!(parse.slash_ymd("not-date-time").is_none());
     }
 
+    #[test]
+    fn time_shape_classification() {
+        use TimeShape::{Hm, Hms, HmsF, HmsFP, ImP, ImsP};
+
+        let cases = [
+            ("2021-04-30 21:14", Hm),
+            ("2021-04-30T21:14", Hm),
+            ("2021-04-30 21:14:10", Hms),
+            ("2021-04-30 21:14:10.052282", HmsF),
+            ("8/8/1965 12:00 AM", ImP),
+            ("8/8/1965 12:00am", ImP),
+            ("8/8/1965 01:00:01 PM", ImsP),
+            ("September 17 2012 10:09am", ImP),
+            ("03/19/2012 10:11:59.318 PM", HmsFP),
+            // A one-colon time with a fraction has no format either; it lands
+            // in a shape whose format still rejects it, so it keeps failing.
+            ("03/19/2012 10:11.123", Hm),
+        ];
+        for (input, want) in cases {
+            assert!(
+                time_shape(input) == want,
+                "time_shape misclassified {input}"
+            );
+        }
+    }
+
     /// Every `fmt_items!` literal in this file must be a valid strftime format.
     ///
     /// The macro compiles its literal lazily on first use and `expect`s the
@@ -1658,6 +1750,11 @@ mod tests {
             // month_dmy_hms: its regex has no am/pm alternative at all, which
             // is also why that chain's two `%I ... %P` formats are unreachable.
             "14 May 2019 07:11:40 PM",
+            // Fractional seconds without seconds: admitted by the regexes'
+            // optional groups, matched by no format.
+            "03/19/2012 10:11.123",
+            "2021-04-30 21:14.052282",
+            "03/19/2012 10:11.123 PM",
         ] {
             assert!(
                 parse.parse(input).is_err(),
