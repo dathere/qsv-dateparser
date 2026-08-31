@@ -8,6 +8,8 @@ homepage     = "https://github.com/dathere/qsv-dateparser"
 repository   = "https://github.com/dathere/qsv-dateparser"
 keywords     = ["date", "time", "datetime", "parser", "parse"]
 license      = "MIT"
+# Developer tooling — not part of the published library.
+exclude      = [".claude/", ".serena/"]
 edition      = "2024"
 rust-version = "1.95"
 
