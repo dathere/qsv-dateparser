@@ -93,9 +93,12 @@ enum TimeShape {
     ImP,
     /// `hh:mm:ss AM/PM`
     ImsP,
-    /// Fractional seconds *and* an AM/PM marker. No format string in any
-    /// family covers this, so every caller maps it to `None` — matching the
-    /// pre-existing behaviour, where the chain simply ran out of formats.
+    /// `hh:mm:ss.fff AM/PM`.
+    ///
+    /// Families whose regex admits both a fraction and an AM/PM marker parse
+    /// this with the same `%I:%M:%S%.f %P` they use for [`Self::ImsP`], since
+    /// `%.f` consumes nothing when there is no period. The two month-name
+    /// families reject it at their regex gate and map it to `None`.
     HmsFP,
 }
 
@@ -422,6 +425,7 @@ where
     // - 2020-01-15T08:00
     // - 2020-01-15T08:00:00
     // - 2020-01-15T08:00:00.123456
+    // - 2012-03-19 10:11:59.318 PM
     #[inline]
     fn ymd_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
@@ -439,14 +443,17 @@ where
             (true, TimeShape::Hms) => fmt_items!("%Y-%m-%dT%H:%M:%S"),
             (true, TimeShape::Hm) => fmt_items!("%Y-%m-%dT%H:%M"),
             (true, TimeShape::HmsF) => fmt_items!("%Y-%m-%dT%H:%M:%S%.f"),
-            (true, TimeShape::ImsP) => fmt_items!("%Y-%m-%dT%I:%M:%S %P"),
+            (true, TimeShape::ImsP | TimeShape::HmsFP) => {
+                fmt_items!("%Y-%m-%dT%I:%M:%S%.f %P")
+            }
             (true, TimeShape::ImP) => fmt_items!("%Y-%m-%dT%I:%M %P"),
             (false, TimeShape::Hms) => fmt_items!("%Y-%m-%d %H:%M:%S"),
             (false, TimeShape::Hm) => fmt_items!("%Y-%m-%d %H:%M"),
             (false, TimeShape::HmsF) => fmt_items!("%Y-%m-%d %H:%M:%S%.f"),
-            (false, TimeShape::ImsP) => fmt_items!("%Y-%m-%d %I:%M:%S %P"),
+            (false, TimeShape::ImsP | TimeShape::HmsFP) => {
+                fmt_items!("%Y-%m-%d %I:%M:%S%.f %P")
+            }
             (false, TimeShape::ImP) => fmt_items!("%Y-%m-%d %I:%M %P"),
-            (_, TimeShape::HmsFP) => return None,
         };
 
         self.dt_from_items(input, items)
@@ -773,6 +780,7 @@ where
     // - 4/02/2014 03:00:51
     // - 03/19/2012 10:11:59
     // - 03/19/2012 10:11:59.3186369
+    // - 03/19/2012 10:11:59.318 PM
     #[inline]
     fn slash_mdy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
@@ -793,14 +801,17 @@ where
             (true, TimeShape::Hms) => fmt_items!("%m/%d/%y %H:%M:%S"),
             (true, TimeShape::Hm) => fmt_items!("%m/%d/%y %H:%M"),
             (true, TimeShape::HmsF) => fmt_items!("%m/%d/%y %H:%M:%S%.f"),
-            (true, TimeShape::ImsP) => fmt_items!("%m/%d/%y %I:%M:%S %P"),
+            (true, TimeShape::ImsP | TimeShape::HmsFP) => {
+                fmt_items!("%m/%d/%y %I:%M:%S%.f %P")
+            }
             (true, TimeShape::ImP) => fmt_items!("%m/%d/%y %I:%M %P"),
             (false, TimeShape::Hms) => fmt_items!("%m/%d/%Y %H:%M:%S"),
             (false, TimeShape::Hm) => fmt_items!("%m/%d/%Y %H:%M"),
             (false, TimeShape::HmsF) => fmt_items!("%m/%d/%Y %H:%M:%S%.f"),
-            (false, TimeShape::ImsP) => fmt_items!("%m/%d/%Y %I:%M:%S %P"),
+            (false, TimeShape::ImsP | TimeShape::HmsFP) => {
+                fmt_items!("%m/%d/%Y %I:%M:%S%.f %P")
+            }
             (false, TimeShape::ImP) => fmt_items!("%m/%d/%Y %I:%M %P"),
-            (_, TimeShape::HmsFP) => return None,
         };
         self.dt_from_items(input, items)
             .ok()
@@ -821,6 +832,7 @@ where
     // - 02/4/2014 03:00:51
     // - 19/03/2012 10:11:59
     // - 19/03/2012 10:11:59.3186369
+    // - 19/03/2012 10:11:59.318 PM
     #[inline]
     fn slash_dmy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
@@ -839,14 +851,17 @@ where
             (true, TimeShape::Hms) => fmt_items!("%d/%m/%y %H:%M:%S"),
             (true, TimeShape::Hm) => fmt_items!("%d/%m/%y %H:%M"),
             (true, TimeShape::HmsF) => fmt_items!("%d/%m/%y %H:%M:%S%.f"),
-            (true, TimeShape::ImsP) => fmt_items!("%d/%m/%y %I:%M:%S %P"),
+            (true, TimeShape::ImsP | TimeShape::HmsFP) => {
+                fmt_items!("%d/%m/%y %I:%M:%S%.f %P")
+            }
             (true, TimeShape::ImP) => fmt_items!("%d/%m/%y %I:%M %P"),
             (false, TimeShape::Hms) => fmt_items!("%d/%m/%Y %H:%M:%S"),
             (false, TimeShape::Hm) => fmt_items!("%d/%m/%Y %H:%M"),
             (false, TimeShape::HmsF) => fmt_items!("%d/%m/%Y %H:%M:%S%.f"),
-            (false, TimeShape::ImsP) => fmt_items!("%d/%m/%Y %I:%M:%S %P"),
+            (false, TimeShape::ImsP | TimeShape::HmsFP) => {
+                fmt_items!("%d/%m/%Y %I:%M:%S%.f %P")
+            }
             (false, TimeShape::ImP) => fmt_items!("%d/%m/%Y %I:%M %P"),
-            (_, TimeShape::HmsFP) => return None,
         };
         self.dt_from_items(input, items)
             .ok()
@@ -921,6 +936,7 @@ where
     // - 2014/4/02 03:00:51
     // - 2012/03/19 10:11:59
     // - 2012/03/19 10:11:59.3186369
+    // - 2012/03/19 10:11:59.318 PM
     #[inline]
     fn slash_ymd_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
         let re: &Regex = regex! {
@@ -934,9 +950,8 @@ where
             TimeShape::Hms => fmt_items!("%Y/%m/%d %H:%M:%S"),
             TimeShape::Hm => fmt_items!("%Y/%m/%d %H:%M"),
             TimeShape::HmsF => fmt_items!("%Y/%m/%d %H:%M:%S%.f"),
-            TimeShape::ImsP => fmt_items!("%Y/%m/%d %I:%M:%S %P"),
+            TimeShape::ImsP | TimeShape::HmsFP => fmt_items!("%Y/%m/%d %I:%M:%S%.f %P"),
             TimeShape::ImP => fmt_items!("%Y/%m/%d %I:%M %P"),
-            TimeShape::HmsFP => return None,
         };
         self.dt_from_items(input, items)
             .ok()
@@ -1726,6 +1741,62 @@ mod tests {
         );
     }
 
+    /// Fractional seconds combined with an AM/PM marker (issue #12).
+    ///
+    /// The four families whose regex admits both a fraction and an AM/PM
+    /// marker parse this with `%I:%M:%S%.f %P`. That one format also covers
+    /// the fraction-less `ImsP` shape, because `%.f` consumes nothing when
+    /// there is no period, so it replaced `%I:%M:%S %P` rather than joining
+    /// it — which is why the plain AM/PM cases are re-asserted here too.
+    #[test]
+    fn fractional_seconds_with_ampm() {
+        let parse = Parse::new(&Utc, Utc::now().time());
+
+        let cases = [
+            (
+                "03/19/2012 10:11:59.318 PM",
+                Utc.ymd(2012, 3, 19).and_hms_milli(22, 11, 59, 318),
+            ),
+            (
+                "3/19/2012 1:11:59.318 am",
+                Utc.ymd(2012, 3, 19).and_hms_milli(1, 11, 59, 318),
+            ),
+            (
+                "03/19/12 10:11:59.318 PM",
+                Utc.ymd(2012, 3, 19).and_hms_milli(22, 11, 59, 318),
+            ),
+            (
+                "2012/03/19 10:11:59.318 PM",
+                Utc.ymd(2012, 3, 19).and_hms_milli(22, 11, 59, 318),
+            ),
+            (
+                "2012-03-19 10:11:59.318 PM",
+                Utc.ymd(2012, 3, 19).and_hms_milli(22, 11, 59, 318),
+            ),
+            (
+                "2012-03-19T10:11:59.318 PM",
+                Utc.ymd(2012, 3, 19).and_hms_milli(22, 11, 59, 318),
+            ),
+            (
+                "2012-03-19 10:11:59.3186369 PM",
+                Utc.ymd(2012, 3, 19).and_hms_nano(22, 11, 59, 318636900),
+            ),
+            // Unchanged by the format swap: no period, so `%.f` matches empty.
+            (
+                "03/19/2012 10:11:59 PM",
+                Utc.ymd(2012, 3, 19).and_hms(22, 11, 59),
+            ),
+            (
+                "2012-03-19 10:11:59 PM",
+                Utc.ymd(2012, 3, 19).and_hms(22, 11, 59),
+            ),
+        ];
+
+        for (input, want) in cases {
+            assert_eq!(parse.parse(input).unwrap(), want, "parse/{input}");
+        }
+    }
+
     /// Shapes that pass a family regex but match none of that family's format
     /// strings, so the whole parse fails. Pinned so that format-chain
     /// refactors stay result-preserving: a shape classifier that newly accepts
@@ -1739,22 +1810,22 @@ mod tests {
         let parse = Parse::new(&Utc, Utc::now().time());
 
         for input in [
-            // slash_mdy_hms: regex allows `.\d+` and am/pm, but `%H:%M:%S%.f`
-            // leaves " PM" over and `%I:%M:%S %P` trips on ".3" at `%P`.
-            "03/19/2012 10:11:59.318 PM",
-            "3/19/2012 1:11:59.318 am",
-            // slash_ymd_hms, same gap.
-            "2012/03/19 10:11:59.318 PM",
-            // month_mdy_hms: its regex has no fractional-seconds group at all.
+            // month_mdy_hms: its regex has no fractional-seconds group at all,
+            // and the parser strips `.` before parsing anyway.
             "May 8, 2009 5:57:51.123 PM",
             // month_dmy_hms: its regex has no am/pm alternative at all, which
             // is also why that chain's two `%I ... %P` formats are unreachable.
             "14 May 2019 07:11:40 PM",
-            // Fractional seconds without seconds: admitted by the regexes'
-            // optional groups, matched by no format.
+            "14 May 2019 07:11:40.164 PM",
+            // Fractional seconds with no seconds field: admitted by the
+            // regexes' optional groups, matched by no format. Malformed rather
+            // than a real shape, so it stays unsupported.
             "03/19/2012 10:11.123",
             "2021-04-30 21:14.052282",
             "03/19/2012 10:11.123 PM",
+            // `%I` only accepts a 1-12 hour, so a 24-hour clock reading cannot
+            // carry an AM/PM marker.
+            "03/19/2012 22:11:59.318 PM",
         ] {
             assert!(
                 parse.parse(input).is_err(),
