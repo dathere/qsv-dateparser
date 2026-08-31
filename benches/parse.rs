@@ -1,6 +1,24 @@
+use chrono::Utc;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use qsv_dateparser::parse;
+use qsv_dateparser::{parse, parse_with_timezone};
+use std::hint::black_box;
 use std::sync::OnceLock;
+
+/// The measured entry point.
+///
+/// Everything here previously went through `parse()`, which resolves against
+/// `Local`. That is not what this crate is optimized for: qsv parses with an
+/// explicit `Utc`, and `Local`'s offset lookup costs roughly 200 ns per call —
+/// about two thirds of a date-only parse. It therefore dominated every
+/// measurement in this file and shrank the apparent effect of any change to
+/// the parsing itself by roughly 3x.
+///
+/// `bench_timezone_overhead` keeps the two side by side so the gap stays
+/// visible instead of being silently folded into every other number.
+#[inline]
+fn p(input: &str) -> bool {
+    parse_with_timezone(black_box(input), &Utc).is_ok()
+}
 
 static SELECTED: OnceLock<Vec<&'static str>> = OnceLock::new();
 static LARGE_DATASET: OnceLock<Vec<&'static str>> = OnceLock::new();
@@ -59,7 +77,7 @@ fn bench_parse_all(c: &mut Criterion) {
         |b, all| {
             b.iter(|| {
                 for date_str in all.iter() {
-                    let _ = parse(*date_str);
+                    black_box(p(date_str));
                 }
             })
         },
@@ -72,7 +90,7 @@ fn bench_parse_all(c: &mut Criterion) {
         |b, all| {
             b.iter(|| {
                 for date_str in all.iter() {
-                    let _ = parse(*date_str);
+                    black_box(p(date_str));
                 }
             })
         },
@@ -82,7 +100,7 @@ fn bench_parse_all(c: &mut Criterion) {
 fn bench_parse_each(c: &mut Criterion) {
     let mut group = c.benchmark_group("parse_each");
     for date_str in SELECTED.get().unwrap().iter() {
-        group.bench_with_input(*date_str, *date_str, |b, input| b.iter(|| parse(input)));
+        group.bench_with_input(*date_str, *date_str, |b, input| b.iter(|| p(input)));
     }
     group.finish();
 }
@@ -112,7 +130,7 @@ fn bench_parse_failures(c: &mut Criterion) {
         |b, all| {
             b.iter(|| {
                 for date_str in all.iter() {
-                    let _ = parse(*date_str);
+                    black_box(p(date_str));
                 }
             })
         },
@@ -141,11 +159,33 @@ fn bench_parse_word_failures(c: &mut Criterion) {
         |b, all| {
             b.iter(|| {
                 for date_str in all.iter() {
-                    let _ = parse(*date_str);
+                    black_box(p(date_str));
                 }
             })
         },
     );
+}
+
+// Cost of the timezone the caller picks, holding the parsing identical.
+//
+// `Local` has to resolve a zone offset; `Utc` does not. Splitting this out
+// keeps the difference measurable on its own, and stops it from being folded
+// into every other benchmark in this file — which is what happened while they
+// all went through `parse()`.
+//
+// The date-only input is the interesting one: those parsers consult
+// `Utc::now()` to derive a default time-of-day, so they pay for the zone twice.
+fn bench_timezone_overhead(c: &mut Criterion) {
+    let mut group = c.benchmark_group("timezone_overhead");
+    for input in ["2021-02-21", "2021-04-30 21:14:10"] {
+        group.bench_with_input(BenchmarkId::new("utc", input), input, |b, input| {
+            b.iter(|| parse_with_timezone(black_box(input), &Utc).is_ok());
+        });
+        group.bench_with_input(BenchmarkId::new("local", input), input, |b, input| {
+            b.iter(|| parse(black_box(input)).is_ok());
+        });
+    }
+    group.finish();
 }
 
 // Benchmark memory usage
@@ -154,7 +194,7 @@ fn bench_memory_usage(c: &mut Criterion) {
         b.iter(|| {
             let mut total = 0;
             for date_str in SELECTED.get().unwrap().iter() {
-                let result = parse(*date_str);
+                let result = parse_with_timezone(black_box(date_str), &Utc);
                 total += std::mem::size_of_val(&result);
             }
             total
@@ -168,6 +208,7 @@ criterion_group!(
     bench_parse_each,
     bench_parse_failures,
     bench_parse_word_failures,
+    bench_timezone_overhead,
     bench_memory_usage
 );
 criterion_main!(benches);
