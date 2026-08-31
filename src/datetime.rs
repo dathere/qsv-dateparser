@@ -62,6 +62,23 @@ const fn build_date_byte_table() -> [bool; 256] {
 
 static DATE_BYTE: [bool; 256] = build_date_byte_table();
 
+/// Bytes matched by `\s` in these patterns, which are all built with
+/// `unicode(false)`: space plus `\t \n \v \f \r`.
+///
+/// `u8::is_ascii_whitespace` is not a substitute — it omits `\v` (0x0B), so
+/// using it here would silently disagree with the regexes.
+const fn build_ws_table() -> [bool; 256] {
+    let mut table = [false; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        table[i] = matches!(i as u8, b' ' | 0x09..=0x0D);
+        i += 1;
+    }
+    table
+}
+
+static DATE_WS: [bool; 256] = build_ws_table();
+
 /// Cheap structural pre-filter run before the regex dispatch chain.
 ///
 /// Any byte outside [`DATE_BYTE`] (e.g. `_`, `#`, `(`, or any non-ASCII byte)
@@ -72,6 +89,59 @@ static DATE_BYTE: [bool; 256] = build_date_byte_table();
 #[inline]
 fn cannot_be_date(input: &str) -> bool {
     input.bytes().any(|b| !DATE_BYTE[b as usize])
+}
+
+/// Extracts the trailing timezone token without asking the regex engine for
+/// capture positions.
+///
+/// The `_z` parsers used a `(?P<tz>…)` group purely to locate this token, but
+/// capture tracking forces the regex crate onto a much slower engine: on
+/// `month_mdy_hms_z`'s pattern, `captures()` costs 188 ns against 18 ns for
+/// `is_match()` or `find()`, and a reused `capture_locations` buffer only gets
+/// it to 179 ns — so it is the engine, not the allocation.
+///
+/// Instead the caller runs a prefix regex (the same pattern minus the tz
+/// group) with `find()`, and passes the match end here. `prefix_end` is where
+/// the greedy prefix stopped, so the rest of the input is the timezone.
+///
+/// Returns `None` whenever the remainder is not unambiguously a timezone
+/// token, which is the caller's signal to fall back to the original
+/// capture-based path. Because the fallback still runs the full pattern, this
+/// cannot change any result: it either produces exactly what the capture group
+/// would have, or declines and lets the slow path decide.
+///
+/// `require_ws` mirrors the difference between the two tz groups: `\s*` in
+/// `ymd_hms_z` versus `\s+` in `month_mdy_hms_z`. It matters because the
+/// prefix's own trailing `\s*` may already have eaten the separator, and the
+/// caller trims the token anyway, so the whitespace has to be accounted for
+/// here rather than inferred from the remainder alone.
+#[inline]
+fn tz_suffix(input: &str, prefix_end: usize, require_ws: bool) -> Option<&str> {
+    let bytes = input.as_bytes();
+    let rest = input.get(prefix_end..)?;
+
+    if require_ws {
+        let leading_ws = rest
+            .as_bytes()
+            .first()
+            .is_some_and(|&b| DATE_WS[b as usize]);
+        let trailing_ws = prefix_end
+            .checked_sub(1)
+            .is_some_and(|i| DATE_WS[bytes[i] as usize]);
+        if !leading_ws && !trailing_ws {
+            return None;
+        }
+    }
+
+    // `\s*` then 3-6 of `[+-:a-zA-Z0-9]`, and nothing else.
+    let token = rest.trim_start_matches(|c: char| (c as u32) < 128 && DATE_WS[c as usize]);
+    if !(3..=6).contains(&token.len()) {
+        return None;
+    }
+    token
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b':'))
+        .then_some(token)
 }
 
 /// Which format a date-time input's time-of-day portion dispatches to.
@@ -483,15 +553,25 @@ where
         if input.len() < 17 || !input.as_bytes()[10].is_ascii_whitespace() {
             return None;
         }
+        // Fast path: locate the timezone with `find()` on the pattern minus the
+        // tz group, which keeps the regex engine off the capture-tracking path.
+        // See `tz_suffix` — on failure this falls through to the original
+        // capture-based match, so no input can change meaning.
+        let prefix: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?"};
+        let fast_tz = prefix
+            .find(input)
+            .and_then(|m| tz_suffix(input, m.end(), false));
+
         let re: &Regex = regex! {
                 r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
         };
 
-        if let Some(caps) = re.captures(input)
-            && let Some(matched_tz) = caps.name("tz")
-        {
+        if let Some(tz) = fast_tz.or_else(|| {
+            re.captures(input)
+                .and_then(|caps| caps.name("tz").map(|m| m.as_str().trim()))
+        }) {
             let parse_from_str = Self::naive_dt_from_items;
-            return match timezone::parse(matched_tz.as_str().trim()) {
+            return match timezone::parse(tz) {
                 Ok(offset) => parse_from_str(input, fmt_items!("%Y-%m-%d %H:%M:%S %Z"))
                     .or_else(|_| parse_from_str(input, fmt_items!("%Y-%m-%d %H:%M %Z")))
                     .or_else(|_| parse_from_str(input, fmt_items!("%Y-%m-%d %H:%M:%S%.f %Z")))
@@ -641,14 +721,26 @@ where
         if !has_year {
             return None;
         }
+        // Fast path — see the twin comment in ymd_hms_z. This pattern's tz
+        // group requires whitespace (`\s+`), but the prefix's own trailing
+        // `\s*` may already have consumed it, so `tz_suffix` is told to accept
+        // the separator on either side of the boundary.
+        let prefix: &Regex = regex! {
+                r"^[a-zA-Z]{3,9}\s+\d{1,2},?\s+\d{4}\s*,?(?:at)?\s+\d{2}:\d{2}(?::\d{2})?\s*(?:am|pm|AM|PM)?"
+        };
+        let fast_tz = prefix
+            .find(input)
+            .and_then(|m| tz_suffix(input, m.end(), true));
+
         let re: &Regex = regex! {
                 r"^[a-zA-Z]{3,9}\s+\d{1,2},?\s+\d{4}\s*,?(?:at)?\s+\d{2}:\d{2}(?::\d{2})?\s*(?:am|pm|AM|PM)?(?P<tz>\s+[+-:a-zA-Z0-9]{3,6})$",
         };
-        if let Some(caps) = re.captures(input)
-            && let Some(matched_tz) = caps.name("tz")
-        {
+        if let Some(tz) = fast_tz.or_else(|| {
+            re.captures(input)
+                .and_then(|caps| caps.name("tz").map(|m| m.as_str().trim()))
+        }) {
             let parse_from_str = Self::naive_dt_from_items;
-            return match timezone::parse(matched_tz.as_str().trim()) {
+            return match timezone::parse(tz) {
                 Ok(offset) => {
                     let mut dt = input.replace(',', "");
                     if let Some(pos) = dt.find("at") {
