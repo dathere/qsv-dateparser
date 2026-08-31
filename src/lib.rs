@@ -46,6 +46,11 @@
 //!     "2014-04-26 17:24:37.123",
 //!     "2014-04-26 17:24:37.3186369",
 //!     "2012-08-03 18:31:59.257000000",
+//!     "2020-01-15T08:00",
+//!     "2020-01-15T08:00:00",
+//!     "2020-01-15T08:00:00.123456",
+//!     "2012-03-19 10:11:59.318 PM",
+//!     "2012-03-19T10:11:59.318 PM",
 //!     // yyyy-mm-dd hh:mm:ss z
 //!     "2017-11-25 13:31:15 PST",
 //!     "2017-11-25 13:31 PST",
@@ -55,6 +60,7 @@
 //!     "2014-04-26 13:13:44 +09:00",
 //!     "2012-08-03 18:31:59.257000000 +0000",
 //!     "2015-09-30 18:48:56.35272715 UTC",
+//!     "2021-05-14 18:51 PDT",
 //!     // yyyy-mm-dd
 //!     "2021-02-21",
 //!     // yyyy-mm-dd z
@@ -101,6 +107,7 @@
 //!     "4/02/2014 03:00:51",
 //!     "03/19/2012 10:11:59",
 //!     "03/19/2012 10:11:59.3186369",
+//!     "03/19/2012 10:11:59.318 PM",
 //!     // mm/dd/yyyy
 //!     "3/31/2014",
 //!     "03/31/2014",
@@ -113,6 +120,7 @@
 //!     "2014/4/02 03:00:51",
 //!     "2012/03/19 10:11:59",
 //!     "2012/03/19 10:11:59.3186369",
+//!     "2012/03/19 10:11:59.318 PM",
 //!     // yyyy/mm/dd
 //!     "2014/3/31",
 //!     "2014/03/31",
@@ -146,7 +154,8 @@
 //!     "8/8/1965 12:00:00 AM",
 //!     "8/8/1965 01:00:01 PM",
 //!     "8/8/1965 01:00 PM",
-//!     "31/12/22 15:00"
+//!     "31/12/22 15:00",
+//!     "19/03/2012 10:11:59.318 PM"
 //! ];
 //!
 //! for date_str in accepted {
@@ -288,6 +297,40 @@ pub fn parse_with<Tz2: TimeZone>(
 #[allow(deprecated)]
 mod tests {
     use super::*;
+
+    /// Every date string quoted in the README's "Accepted date formats" list
+    /// must actually parse.
+    ///
+    /// The equivalent list in this file's crate docs is a doctest, so CI
+    /// catches it when an entry stops parsing. The README's copy had no such
+    /// check, which is why it was the one that drifted. Reading it back from
+    /// `include_str!` gives it the same guarantee.
+    ///
+    /// Note this catches a README that *claims* a format the crate does not
+    /// accept; it cannot catch a newly accepted format the README omits.
+    #[test]
+    fn readme_accepted_formats_all_parse() {
+        let readme = include_str!("../README.md");
+        // The list is one quoted string per line, optionally comma-terminated.
+        let quoted = regex::Regex::new(r#"(?m)^"([^"]+)",?$"#).unwrap();
+
+        let mut checked = 0_usize;
+        for caps in quoted.captures_iter(readme) {
+            let input = &caps[1];
+            // The list mixes MDY- and DMY-ordered examples, so accept either
+            // preference — the README documents both under one heading.
+            assert!(
+                parse_with_preference(input, false).is_ok()
+                    || parse_with_preference(input, true).is_ok(),
+                "README lists {input:?}, but it does not parse"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 80,
+            "expected to check the whole README list, only found {checked} entries"
+        );
+    }
 
     #[derive(Clone, Copy)]
     enum Trunc {

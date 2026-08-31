@@ -33,6 +33,8 @@ It also adds support for parsing dates in DMY format, with the `parse_with_prefe
 "2020-01-15T08:00",
 "2020-01-15T08:00:00",
 "2020-01-15T08:00:00.123456",
+"2012-03-19 10:11:59.318 PM",
+"2012-03-19T10:11:59.318 PM",
 // yyyy-mm-dd hh:mm:ss z
 "2017-11-25 13:31:15 PST",
 "2017-11-25 13:31 PST",
@@ -42,6 +44,7 @@ It also adds support for parsing dates in DMY format, with the `parse_with_prefe
 "2014-04-26 13:13:44 +09:00",
 "2012-08-03 18:31:59.257000000 +0000",
 "2015-09-30 18:48:56.35272715 UTC",
+"2021-05-14 18:51 PDT",
 // yyyy-mm-dd
 "2021-02-21",
 // yyyy-mm-dd z
@@ -88,6 +91,7 @@ It also adds support for parsing dates in DMY format, with the `parse_with_prefe
 "4/02/2014 03:00:51",
 "03/19/2012 10:11:59",
 "03/19/2012 10:11:59.3186369",
+"03/19/2012 10:11:59.318 PM",
 // mm/dd/yyyy
 "3/31/2014",
 "03/31/2014",
@@ -100,6 +104,7 @@ It also adds support for parsing dates in DMY format, with the `parse_with_prefe
 "2014/4/02 03:00:51",
 "2012/03/19 10:11:59",
 "2012/03/19 10:11:59.3186369",
+"2012/03/19 10:11:59.318 PM",
 // yyyy/mm/dd
 "2014/3/31",
 "2014/03/31",
@@ -116,5 +121,6 @@ It also adds support for parsing dates in DMY format, with the `parse_with_prefe
 "8/8/1965 12:00:00 AM",
 "8/8/1965 01:00:01 PM",
 "8/8/1965 01:00 PM",
-"31/12/22 15:00"
+"31/12/22 15:00",
+"19/03/2012 10:11:59.318 PM"
 ```
