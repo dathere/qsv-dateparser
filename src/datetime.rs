@@ -1,6 +1,7 @@
 #![allow(deprecated)]
 use crate::timezone;
 use anyhow::{Result, anyhow};
+use chrono::format::{Item, ParseResult, Parsed, parse as parse_items};
 use chrono::prelude::*;
 use regex::Regex;
 
@@ -13,6 +14,34 @@ macro_rules! regex {
                 .build()
                 .expect("invalid regex literal")
         })
+    }};
+}
+
+/// Compiles a strftime format literal into `chrono` format items exactly once,
+/// mirroring [`regex!`].
+///
+/// `chrono`'s `parse_from_str` / `datetime_from_str` convenience methods walk
+/// the format string through `StrftimeItems` on *every* call. Since every
+/// format in this file is a literal, that walk is pure repeated work, and it is
+/// paid several times per input because the parsers try formats in an
+/// `or_else` chain. Hoisting it into a `OnceLock` leaves the parse itself
+/// untouched: each method below reduces to exactly the same
+/// `parse(&mut Parsed, input, items)` plus `Parsed::to_*` that the chrono
+/// convenience method performs internally.
+///
+/// The format is a literal, so the resulting items borrow `'static` and the
+/// `expect` is checked once at first use rather than per call.
+macro_rules! fmt_items {
+    ($fmt:literal $(,)?) => {{
+        static ITEMS: std::sync::OnceLock<Vec<chrono::format::Item<'static>>> =
+            std::sync::OnceLock::new();
+        ITEMS
+            .get_or_init(|| {
+                chrono::format::StrftimeItems::new($fmt)
+                    .parse()
+                    .expect("invalid strftime literal")
+            })
+            .as_slice()
     }};
 }
 /// Lookup table of bytes that may legally appear in an accepted date format:
@@ -110,6 +139,37 @@ where
             default_time,
             prefer_dmy,
         }
+    }
+
+    /// Drop-in replacement for `Tz::datetime_from_str` taking pre-compiled items.
+    ///
+    /// Note that `Parsed` **must** be constructed fresh for every attempt.
+    /// `Parsed::set_*` returns `Err` when a field is set twice to conflicting
+    /// values, so reusing one `Parsed` across the `or_else` chains below would
+    /// produce silently wrong results rather than a compile error.
+    #[inline]
+    fn dt_from_items(&self, input: &str, items: &[Item<'static>]) -> ParseResult<DateTime<Tz2>> {
+        let mut parsed = Parsed::new();
+        parse_items(&mut parsed, input, items.iter())?;
+        parsed.to_datetime_with_timezone(self.tz)
+    }
+
+    /// Drop-in replacement for `NaiveDateTime::parse_from_str` taking
+    /// pre-compiled items. See [`Self::dt_from_items`] on `Parsed` reuse.
+    #[inline]
+    fn naive_dt_from_items(input: &str, items: &[Item<'static>]) -> ParseResult<NaiveDateTime> {
+        let mut parsed = Parsed::new();
+        parse_items(&mut parsed, input, items.iter())?;
+        parsed.to_naive_datetime_with_offset(0)
+    }
+
+    /// Drop-in replacement for `NaiveDate::parse_from_str` taking pre-compiled
+    /// items. See [`Self::dt_from_items`] on `Parsed` reuse.
+    #[inline]
+    fn naive_date_from_items(input: &str, items: &[Item<'static>]) -> ParseResult<NaiveDate> {
+        let mut parsed = Parsed::new();
+        parse_items(&mut parsed, input, items.iter())?;
+        parsed.to_naive_date()
     }
 
     /// This method tries to parse the input datetime string with a list of accepted formats. See
@@ -312,28 +372,27 @@ where
         // avoids doubling the trial-parse chain for the common space case.
         let (fmt_hms, fmt_hm, fmt_hms_f, fmt_ims_p, fmt_im_p) = if input.as_bytes()[10] == b'T' {
             (
-                "%Y-%m-%dT%H:%M:%S",
-                "%Y-%m-%dT%H:%M",
-                "%Y-%m-%dT%H:%M:%S%.f",
-                "%Y-%m-%dT%I:%M:%S %P",
-                "%Y-%m-%dT%I:%M %P",
+                fmt_items!("%Y-%m-%dT%H:%M:%S"),
+                fmt_items!("%Y-%m-%dT%H:%M"),
+                fmt_items!("%Y-%m-%dT%H:%M:%S%.f"),
+                fmt_items!("%Y-%m-%dT%I:%M:%S %P"),
+                fmt_items!("%Y-%m-%dT%I:%M %P"),
             )
         } else {
             (
-                "%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%d %H:%M",
-                "%Y-%m-%d %H:%M:%S%.f",
-                "%Y-%m-%d %I:%M:%S %P",
-                "%Y-%m-%d %I:%M %P",
+                fmt_items!("%Y-%m-%d %H:%M:%S"),
+                fmt_items!("%Y-%m-%d %H:%M"),
+                fmt_items!("%Y-%m-%d %H:%M:%S%.f"),
+                fmt_items!("%Y-%m-%d %I:%M:%S %P"),
+                fmt_items!("%Y-%m-%d %I:%M %P"),
             )
         };
 
-        self.tz
-            .datetime_from_str(input, fmt_hms)
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_hm))
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_hms_f))
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_ims_p))
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_im_p))
+        self.dt_from_items(input, fmt_hms)
+            .or_else(|_| self.dt_from_items(input, fmt_hm))
+            .or_else(|_| self.dt_from_items(input, fmt_hms_f))
+            .or_else(|_| self.dt_from_items(input, fmt_ims_p))
+            .or_else(|_| self.dt_from_items(input, fmt_im_p))
             .ok()
             .map(|parsed| parsed.with_timezone(&Utc))
             .map(Ok)
@@ -361,11 +420,11 @@ where
         if let Some(caps) = re.captures(input)
             && let Some(matched_tz) = caps.name("tz")
         {
-            let parse_from_str = NaiveDateTime::parse_from_str;
+            let parse_from_str = Self::naive_dt_from_items;
             return match timezone::parse(matched_tz.as_str().trim()) {
-                Ok(offset) => parse_from_str(input, "%Y-%m-%d %H:%M:%S %Z")
-                    .or_else(|_| parse_from_str(input, "%Y-%m-%d %H:%M %Z"))
-                    .or_else(|_| parse_from_str(input, "%Y-%m-%d %H:%M:%S%.f %Z"))
+                Ok(offset) => parse_from_str(input, fmt_items!("%Y-%m-%d %H:%M:%S %Z"))
+                    .or_else(|_| parse_from_str(input, fmt_items!("%Y-%m-%d %H:%M %Z")))
+                    .or_else(|_| parse_from_str(input, fmt_items!("%Y-%m-%d %H:%M:%S%.f %Z")))
                     .ok()
                     .and_then(|parsed| offset.from_local_datetime(&parsed).single())
                     .map(|datetime| datetime.with_timezone(&Utc))
@@ -390,7 +449,7 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
-        NaiveDate::parse_from_str(input, "%Y-%m-%d")
+        Self::naive_date_from_items(input, fmt_items!("%Y-%m-%d"))
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
@@ -419,7 +478,7 @@ where
                         .date()
                         .and_time(self.default_time)?
                         .with_timezone(&offset);
-                    NaiveDate::parse_from_str(input, "%Y-%m-%d %Z")
+                    Self::naive_date_from_items(input, fmt_items!("%Y-%m-%d %Z"))
                         .ok()
                         .map(|parsed| parsed.and_time(now.time()))
                         .and_then(|datetime| offset.from_local_datetime(&datetime).single())
@@ -446,8 +505,8 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
-        NaiveDate::parse_from_str(input, "%Y-%m-%d")
-            .or_else(|_| NaiveDate::parse_from_str(input, "%Y-%b-%d"))
+        Self::naive_date_from_items(input, fmt_items!("%Y-%m-%d"))
+            .or_else(|_| Self::naive_date_from_items(input, fmt_items!("%Y-%b-%d")))
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
@@ -473,11 +532,10 @@ where
         // inputs that reach this point — marginally-malformed inputs (e.g. "May 27,2012 …")
         // still fail to parse after stripping because the digits run together.
         let dt = input.replace([',', '.'], "");
-        self.tz
-            .datetime_from_str(&dt, "%B %d %Y %H:%M:%S")
-            .or_else(|_| self.tz.datetime_from_str(&dt, "%B %d %Y %H:%M"))
-            .or_else(|_| self.tz.datetime_from_str(&dt, "%B %d %Y %I:%M:%S %P"))
-            .or_else(|_| self.tz.datetime_from_str(&dt, "%B %d %Y %I:%M %P"))
+        self.dt_from_items(&dt, fmt_items!("%B %d %Y %H:%M:%S"))
+            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%B %d %Y %H:%M")))
+            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%B %d %Y %I:%M:%S %P")))
+            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%B %d %Y %I:%M %P")))
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -510,17 +568,17 @@ where
         if let Some(caps) = re.captures(input)
             && let Some(matched_tz) = caps.name("tz")
         {
-            let parse_from_str = NaiveDateTime::parse_from_str;
+            let parse_from_str = Self::naive_dt_from_items;
             return match timezone::parse(matched_tz.as_str().trim()) {
                 Ok(offset) => {
                     let mut dt = input.replace(',', "");
                     if let Some(pos) = dt.find("at") {
                         dt.replace_range(pos..pos + 2, "");
                     }
-                    parse_from_str(&dt, "%B %d %Y %H:%M:%S %Z")
-                        .or_else(|_| parse_from_str(&dt, "%B %d %Y %H:%M %Z"))
-                        .or_else(|_| parse_from_str(&dt, "%B %d %Y %I:%M:%S %P %Z"))
-                        .or_else(|_| parse_from_str(&dt, "%B %d %Y %I:%M %P %Z"))
+                    parse_from_str(&dt, fmt_items!("%B %d %Y %H:%M:%S %Z"))
+                        .or_else(|_| parse_from_str(&dt, fmt_items!("%B %d %Y %H:%M %Z")))
+                        .or_else(|_| parse_from_str(&dt, fmt_items!("%B %d %Y %I:%M:%S %P %Z")))
+                        .or_else(|_| parse_from_str(&dt, fmt_items!("%B %d %Y %I:%M %P %Z")))
                         .ok()
                         .and_then(|parsed| offset.from_local_datetime(&parsed).single())
                         .map(|datetime| datetime.with_timezone(&Utc))
@@ -555,8 +613,8 @@ where
         // is equivalent to the previous `replace(", ", " ").replace(". ", " ")` for all
         // inputs that reach this point.
         let dt = input.replace([',', '.'], "");
-        NaiveDate::parse_from_str(&dt, "%B %d %y")
-            .or_else(|_| NaiveDate::parse_from_str(&dt, "%B %d %Y"))
+        Self::naive_date_from_items(&dt, fmt_items!("%B %d %y"))
+            .or_else(|_| Self::naive_date_from_items(&dt, fmt_items!("%B %d %Y")))
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
@@ -582,12 +640,11 @@ where
         }
 
         let dt = input.replace(',', "");
-        self.tz
-            .datetime_from_str(&dt, "%d %B %Y %H:%M:%S")
-            .or_else(|_| self.tz.datetime_from_str(&dt, "%d %B %Y %H:%M"))
-            .or_else(|_| self.tz.datetime_from_str(&dt, "%d %B %Y %H:%M:%S%.f"))
-            .or_else(|_| self.tz.datetime_from_str(&dt, "%d %B %Y %I:%M:%S %P"))
-            .or_else(|_| self.tz.datetime_from_str(&dt, "%d %B %Y %I:%M %P"))
+        self.dt_from_items(&dt, fmt_items!("%d %B %Y %H:%M:%S"))
+            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%d %B %Y %H:%M")))
+            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%d %B %Y %H:%M:%S%.f")))
+            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%d %B %Y %I:%M:%S %P")))
+            .or_else(|_| self.dt_from_items(&dt, fmt_items!("%d %B %Y %I:%M %P")))
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -618,10 +675,10 @@ where
             && bytes[len - 4..].iter().all(|b| b.is_ascii_digit())
             && bytes[len - 5].is_ascii_whitespace();
         let parsed = if four_digit_year {
-            NaiveDate::parse_from_str(input, "%d %B %Y")
+            Self::naive_date_from_items(input, fmt_items!("%d %B %Y"))
         } else {
-            NaiveDate::parse_from_str(input, "%d %B %y")
-                .or_else(|_| NaiveDate::parse_from_str(input, "%d %B %Y"))
+            Self::naive_date_from_items(input, fmt_items!("%d %B %y"))
+                .or_else(|_| Self::naive_date_from_items(input, fmt_items!("%d %B %Y")))
         };
         parsed
             .ok()
@@ -659,27 +716,26 @@ where
         let (fmt_hms, fmt_hm, fmt_hms_f, fmt_ims_p, fmt_im_p) =
             if slash_year_is_two_digits(input.as_bytes()) {
                 (
-                    "%m/%d/%y %H:%M:%S",
-                    "%m/%d/%y %H:%M",
-                    "%m/%d/%y %H:%M:%S%.f",
-                    "%m/%d/%y %I:%M:%S %P",
-                    "%m/%d/%y %I:%M %P",
+                    fmt_items!("%m/%d/%y %H:%M:%S"),
+                    fmt_items!("%m/%d/%y %H:%M"),
+                    fmt_items!("%m/%d/%y %H:%M:%S%.f"),
+                    fmt_items!("%m/%d/%y %I:%M:%S %P"),
+                    fmt_items!("%m/%d/%y %I:%M %P"),
                 )
             } else {
                 (
-                    "%m/%d/%Y %H:%M:%S",
-                    "%m/%d/%Y %H:%M",
-                    "%m/%d/%Y %H:%M:%S%.f",
-                    "%m/%d/%Y %I:%M:%S %P",
-                    "%m/%d/%Y %I:%M %P",
+                    fmt_items!("%m/%d/%Y %H:%M:%S"),
+                    fmt_items!("%m/%d/%Y %H:%M"),
+                    fmt_items!("%m/%d/%Y %H:%M:%S%.f"),
+                    fmt_items!("%m/%d/%Y %I:%M:%S %P"),
+                    fmt_items!("%m/%d/%Y %I:%M %P"),
                 )
             };
-        self.tz
-            .datetime_from_str(input, fmt_hms)
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_hm))
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_hms_f))
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_ims_p))
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_im_p))
+        self.dt_from_items(input, fmt_hms)
+            .or_else(|_| self.dt_from_items(input, fmt_hm))
+            .or_else(|_| self.dt_from_items(input, fmt_hms_f))
+            .or_else(|_| self.dt_from_items(input, fmt_ims_p))
+            .or_else(|_| self.dt_from_items(input, fmt_im_p))
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -711,27 +767,26 @@ where
         let (fmt_hms, fmt_hm, fmt_hms_f, fmt_ims_p, fmt_im_p) =
             if slash_year_is_two_digits(input.as_bytes()) {
                 (
-                    "%d/%m/%y %H:%M:%S",
-                    "%d/%m/%y %H:%M",
-                    "%d/%m/%y %H:%M:%S%.f",
-                    "%d/%m/%y %I:%M:%S %P",
-                    "%d/%m/%y %I:%M %P",
+                    fmt_items!("%d/%m/%y %H:%M:%S"),
+                    fmt_items!("%d/%m/%y %H:%M"),
+                    fmt_items!("%d/%m/%y %H:%M:%S%.f"),
+                    fmt_items!("%d/%m/%y %I:%M:%S %P"),
+                    fmt_items!("%d/%m/%y %I:%M %P"),
                 )
             } else {
                 (
-                    "%d/%m/%Y %H:%M:%S",
-                    "%d/%m/%Y %H:%M",
-                    "%d/%m/%Y %H:%M:%S%.f",
-                    "%d/%m/%Y %I:%M:%S %P",
-                    "%d/%m/%Y %I:%M %P",
+                    fmt_items!("%d/%m/%Y %H:%M:%S"),
+                    fmt_items!("%d/%m/%Y %H:%M"),
+                    fmt_items!("%d/%m/%Y %H:%M:%S%.f"),
+                    fmt_items!("%d/%m/%Y %I:%M:%S %P"),
+                    fmt_items!("%d/%m/%Y %I:%M %P"),
                 )
             };
-        self.tz
-            .datetime_from_str(input, fmt_hms)
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_hm))
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_hms_f))
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_ims_p))
-            .or_else(|_| self.tz.datetime_from_str(input, fmt_im_p))
+        self.dt_from_items(input, fmt_hms)
+            .or_else(|_| self.dt_from_items(input, fmt_hm))
+            .or_else(|_| self.dt_from_items(input, fmt_hms_f))
+            .or_else(|_| self.dt_from_items(input, fmt_ims_p))
+            .or_else(|_| self.dt_from_items(input, fmt_im_p))
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -755,11 +810,11 @@ where
             .and_time(self.default_time)?
             .with_timezone(self.tz);
         let fmt = if slash_year_is_two_digits(input.as_bytes()) {
-            "%m/%d/%y"
+            fmt_items!("%m/%d/%y")
         } else {
-            "%m/%d/%Y"
+            fmt_items!("%m/%d/%Y")
         };
-        NaiveDate::parse_from_str(input, fmt)
+        Self::naive_date_from_items(input, fmt)
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
@@ -785,11 +840,11 @@ where
             .and_time(self.default_time)?
             .with_timezone(self.tz);
         let fmt = if slash_year_is_two_digits(input.as_bytes()) {
-            "%d/%m/%y"
+            fmt_items!("%d/%m/%y")
         } else {
-            "%d/%m/%Y"
+            fmt_items!("%d/%m/%Y")
         };
-        NaiveDate::parse_from_str(input, fmt)
+        Self::naive_date_from_items(input, fmt)
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
@@ -813,12 +868,11 @@ where
             return None;
         }
 
-        self.tz
-            .datetime_from_str(input, "%Y/%m/%d %H:%M:%S")
-            .or_else(|_| self.tz.datetime_from_str(input, "%Y/%m/%d %H:%M"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%Y/%m/%d %H:%M:%S%.f"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%Y/%m/%d %I:%M:%S %P"))
-            .or_else(|_| self.tz.datetime_from_str(input, "%Y/%m/%d %I:%M %P"))
+        self.dt_from_items(input, fmt_items!("%Y/%m/%d %H:%M:%S"))
+            .or_else(|_| self.dt_from_items(input, fmt_items!("%Y/%m/%d %H:%M")))
+            .or_else(|_| self.dt_from_items(input, fmt_items!("%Y/%m/%d %H:%M:%S%.f")))
+            .or_else(|_| self.dt_from_items(input, fmt_items!("%Y/%m/%d %I:%M:%S %P")))
+            .or_else(|_| self.dt_from_items(input, fmt_items!("%Y/%m/%d %I:%M %P")))
             .ok()
             .map(|at_tz| at_tz.with_timezone(&Utc))
             .map(Ok)
@@ -839,7 +893,7 @@ where
             .date()
             .and_time(self.default_time)?
             .with_timezone(self.tz);
-        NaiveDate::parse_from_str(input, "%Y/%m/%d")
+        Self::naive_date_from_items(input, fmt_items!("%Y/%m/%d"))
             .ok()
             .map(|parsed| parsed.and_time(now.time()))
             .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
@@ -1548,6 +1602,36 @@ mod tests {
             )
         }
         assert!(parse.slash_ymd("not-date-time").is_none());
+    }
+
+    /// Every `fmt_items!` literal in this file must be a valid strftime format.
+    ///
+    /// The macro compiles its literal lazily on first use and `expect`s the
+    /// result, so an invalid format would panic the first time some input
+    /// happened to reach that particular link of an `or_else` chain — possibly
+    /// only in production. The literals are extracted from this file's own
+    /// source rather than re-listed here, so the check cannot drift out of
+    /// sync as parsers are added or reworked.
+    #[test]
+    fn every_fmt_items_literal_is_valid() {
+        let src = include_str!("datetime.rs");
+        // Matches uses, not the macro definition (which has no `!`).
+        let call = Regex::new(r#"fmt_items!\("([^"]*)"\)"#).unwrap();
+
+        let mut checked = 0_usize;
+        for caps in call.captures_iter(src) {
+            let fmt = &caps[1];
+            assert!(
+                chrono::format::StrftimeItems::new(fmt).parse().is_ok(),
+                "invalid strftime literal: {fmt}"
+            );
+            checked += 1;
+        }
+        // Guard against the extraction silently matching nothing.
+        assert!(
+            checked >= 50,
+            "expected to check every fmt_items! literal, only found {checked}"
+        );
     }
 
     /// Shapes that pass a family regex but match none of that family's format
