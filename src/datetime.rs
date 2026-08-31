@@ -337,20 +337,47 @@ where
     ///   `$`-anchored `month_dmy_*` regexes fail; conversely `month_dmy_*` only
     ///   succeeds without a timezone, which makes `rfc2822` fail. The two are
     ///   mutually exclusive, so deferring `rfc2822` cannot change any result.
+    ///
+    /// Within that order, the first byte selects which families can match at
+    /// all. Every family gate is `^`-anchored on either a digit or a letter, so
+    /// a letter-leading input cannot match any of the numeric families and vice
+    /// versa. Running them anyway costs roughly 5-10 ns each in regex startup
+    /// even when the first byte rejects immediately, which is most of the cost
+    /// of a non-date word — the dominant input in a `qsv stats --infer-dates`
+    /// run over a text column.
+    ///
+    /// `rfc2822` stays in the digit branch as well as the letter branch: the
+    /// day-of-week is optional in RFC 2822, so `02 Jun 2021 06:31:39 GMT`
+    /// parses and leads with a digit.
     #[inline]
     pub fn parse(&self, input: &str) -> Result<DateTime<Utc>> {
         if cannot_be_date(input) {
             return Err(anyhow!("{} did not match any formats.", input));
         }
-        self.slash_mdy_family(input)
-            .or_else(|| self.slash_ymd_family(input))
-            .or_else(|| self.ymd_family(input))
-            .or_else(|| self.month_ymd(input))
-            .or_else(|| self.month_mdy_family(input))
-            .or_else(|| self.month_dmy_family(input))
-            .or_else(|| self.unix_timestamp(input))
-            .or_else(|| self.rfc2822(input))
-            .unwrap_or_else(|| Err(anyhow!("{} did not match any formats.", input)))
+        let Some(&first) = input.as_bytes().first() else {
+            return Err(anyhow!("{} did not match any formats.", input));
+        };
+
+        let parsed = if first.is_ascii_digit() {
+            self.slash_mdy_family(input)
+                .or_else(|| self.slash_ymd_family(input))
+                .or_else(|| self.ymd_family(input))
+                .or_else(|| self.month_ymd(input))
+                .or_else(|| self.month_dmy_family(input))
+                .or_else(|| self.unix_timestamp(input))
+                .or_else(|| self.rfc2822(input))
+        } else if first.is_ascii_alphabetic() {
+            // `month_mdy_family` is the only letter-anchored gate.
+            // `unix_timestamp` is excluded by its own lead-byte pre-filter.
+            self.month_mdy_family(input).or_else(|| self.rfc2822(input))
+        } else {
+            // `+`, `-`, `.` and the separators that survive `cannot_be_date`.
+            // No family gate can match, but a signed or bare-decimal timestamp
+            // can; `rfc2822` is kept for its own leading-whitespace handling.
+            self.unix_timestamp(input).or_else(|| self.rfc2822(input))
+        };
+
+        parsed.unwrap_or_else(|| Err(anyhow!("{} did not match any formats.", input)))
     }
 
     #[inline]
