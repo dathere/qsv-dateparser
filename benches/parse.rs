@@ -23,6 +23,7 @@ fn bench_parse_all(c: &mut Criterion) {
             "14 May 2019 19:11:40.164",      // month_dmy_hms
             "1 July 2013",                   // month_dmy
             "03/19/2012 10:11:59",           // slash_mdy_hms
+            "8/8/1965 01:00:01 PM",          // slash_mdy_hms, AM/PM (NYC 311 shape)
             "08/21/71",                      // slash_mdy
             "2012/03/19 10:11:59",           // slash_ymd_hms
             "2014/3/31",                     // slash_ymd

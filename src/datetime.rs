@@ -1549,4 +1549,36 @@ mod tests {
         }
         assert!(parse.slash_ymd("not-date-time").is_none());
     }
+
+    /// Shapes that pass a family regex but match none of that family's format
+    /// strings, so the whole parse fails. Pinned so that format-chain
+    /// refactors stay result-preserving: a shape classifier that newly accepts
+    /// any of these has widened the accepted input set, which is a behavior
+    /// change and not a performance optimization.
+    ///
+    /// The common thread is fractional seconds combined with an AM/PM marker,
+    /// for which no format string exists in any chain.
+    #[test]
+    fn unsupported_shapes_still_fail() {
+        let parse = Parse::new(&Utc, Utc::now().time());
+
+        for input in [
+            // slash_mdy_hms: regex allows `.\d+` and am/pm, but `%H:%M:%S%.f`
+            // leaves " PM" over and `%I:%M:%S %P` trips on ".3" at `%P`.
+            "03/19/2012 10:11:59.318 PM",
+            "3/19/2012 1:11:59.318 am",
+            // slash_ymd_hms, same gap.
+            "2012/03/19 10:11:59.318 PM",
+            // month_mdy_hms: its regex has no fractional-seconds group at all.
+            "May 8, 2009 5:57:51.123 PM",
+            // month_dmy_hms: its regex has no am/pm alternative at all, which
+            // is also why that chain's two `%I ... %P` formats are unreachable.
+            "14 May 2019 07:11:40 PM",
+        ] {
+            assert!(
+                parse.parse(input).is_err(),
+                "{input} is expected to remain unsupported"
+            );
+        }
+    }
 }
