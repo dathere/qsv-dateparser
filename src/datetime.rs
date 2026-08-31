@@ -74,13 +74,18 @@ fn cannot_be_date(input: &str) -> bool {
     input.bytes().any(|b| !DATE_BYTE[b as usize])
 }
 
-/// Which time-of-day format a date-time input carries.
+/// Which format a date-time input's time-of-day portion dispatches to.
 ///
-/// Every family whose regex ends in
-/// `\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?\s*(?:am|pm|AM|PM)?` admits exactly
-/// these shapes, and each one is matched by at most a single format string.
-/// Classifying up front therefore replaces a chain of up to five trial parses
-/// — of which all but the last are guaranteed to fail — with one attempt.
+/// These are parse-dispatch buckets, not an exhaustive account of what the
+/// family regexes admit. `\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?\s*(?:am|pm|AM|PM)?`
+/// also admits a fraction with no seconds field — `hh:mm.fff`, with or without
+/// an AM/PM marker — which buckets as [`Self::Hm`] or [`Self::ImP`] and then
+/// fails against that format. It is malformed rather than a real shape, and
+/// `unsupported_shapes_still_fail` pins it as unsupported.
+///
+/// Each bucket is matched by at most one format string per family, so
+/// classifying up front replaces a chain of up to five trial parses — all but
+/// the last guaranteed to fail — with a single attempt.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TimeShape {
     /// `hh:mm`
@@ -106,9 +111,10 @@ enum TimeShape {
 /// family regex, from a single byte scan.
 ///
 /// Callers pass the exact string they are about to hand to the parser, not the
-/// raw input: `month_mdy_hms` and `month_dmy_hms` strip `,` and `.` first, and
-/// classifying before that would mistake the period in `Sept. 17, 2012` for
-/// fractional seconds.
+/// raw input. `month_mdy_hms` strips both `,` and `.` beforehand, so
+/// classifying the raw input would mistake the period in `Sept. 17, 2012` for
+/// fractional seconds. `month_dmy_hms` strips only `,` — it must keep a
+/// fractional-seconds period for [`TimeShape::HmsF`] to be reachable.
 ///
 /// A colon count of 2 distinguishes `%H:%M:%S` from `%H:%M`; the callers'
 /// regexes cap the time at two colons and admit none anywhere else. The AM/PM
@@ -1795,36 +1801,68 @@ mod tests {
         for (input, want) in cases {
             assert_eq!(parse.parse(input).unwrap(), want, "parse/{input}");
         }
+
+        // slash_dmy_hms's arms are only reached day-first, so the cases above
+        // never exercise them. Both year widths, since the parser dispatches
+        // on year width before it dispatches on time shape.
+        let dmy = Parse::new_with_preference(&Utc, Utc::now().time(), true);
+        let dmy_cases = [
+            (
+                "19/03/2012 10:11:59.318 PM",
+                Utc.ymd(2012, 3, 19).and_hms_milli(22, 11, 59, 318),
+            ),
+            (
+                "19/03/12 10:11:59.318 PM",
+                Utc.ymd(2012, 3, 19).and_hms_milli(22, 11, 59, 318),
+            ),
+            (
+                "9/3/2012 1:11:59.318 am",
+                Utc.ymd(2012, 3, 9).and_hms_milli(1, 11, 59, 318),
+            ),
+            // Fraction-less, to pin that the format swap left it alone.
+            (
+                "19/03/2012 10:11:59 PM",
+                Utc.ymd(2012, 3, 19).and_hms(22, 11, 59),
+            ),
+        ];
+
+        for (input, want) in dmy_cases {
+            assert_eq!(dmy.parse(input).unwrap(), want, "prefer_dmy/{input}");
+        }
     }
 
-    /// Shapes that pass a family regex but match none of that family's format
-    /// strings, so the whole parse fails. Pinned so that format-chain
-    /// refactors stay result-preserving: a shape classifier that newly accepts
-    /// any of these has widened the accepted input set, which is a behavior
-    /// change and not a performance optimization.
+    /// Inputs that resemble an accepted shape but do not parse. Pinned so that
+    /// format-chain refactors stay result-preserving: a classifier that newly
+    /// accepts any of these has widened the accepted input set, which is a
+    /// behavior change rather than a performance optimization.
     ///
-    /// The common thread is fractional seconds combined with an AM/PM marker,
-    /// for which no format string exists in any chain.
+    /// These are independent gaps, not one gap. Some are turned away by their
+    /// family regex before any format is tried; others clear the regex and
+    /// then match no format. Each case carries its own reason below.
     #[test]
     fn unsupported_shapes_still_fail() {
         let parse = Parse::new(&Utc, Utc::now().time());
 
         for input in [
-            // month_mdy_hms: its regex has no fractional-seconds group at all,
-            // and the parser strips `.` before parsing anyway.
+            // Rejected at the regex gate: month_mdy_hms has no
+            // fractional-seconds group at all, and strips `.` before parsing.
             "May 8, 2009 5:57:51.123 PM",
-            // month_dmy_hms: its regex has no am/pm alternative at all, which
-            // is also why that chain's two `%I ... %P` formats are unreachable.
+            // Rejected at the regex gate: month_dmy_hms has no am/pm
+            // alternative, which is also why that chain's two `%I ... %P`
+            // formats were unreachable and have been removed. Note the first
+            // of these carries no fractional seconds — it is the missing
+            // am/pm alternative alone that rejects it.
             "14 May 2019 07:11:40 PM",
             "14 May 2019 07:11:40.164 PM",
-            // Fractional seconds with no seconds field: admitted by the
-            // regexes' optional groups, matched by no format. Malformed rather
-            // than a real shape, so it stays unsupported.
+            // Clears the regex, matches no format: a fraction with no seconds
+            // field. The optional groups admit it, but it buckets as Hm/ImP
+            // and fails there. Malformed rather than a real shape. Note the
+            // first two carry no AM/PM marker.
             "03/19/2012 10:11.123",
             "2021-04-30 21:14.052282",
             "03/19/2012 10:11.123 PM",
-            // `%I` only accepts a 1-12 hour, so a 24-hour clock reading cannot
-            // carry an AM/PM marker.
+            // Clears the regex, matches no format: `%I` only accepts a 1-12
+            // hour, so a 24-hour reading cannot carry an AM/PM marker.
             "03/19/2012 22:11:59.318 PM",
         ] {
             assert!(
