@@ -311,12 +311,46 @@ mod tests {
     #[test]
     fn readme_accepted_formats_all_parse() {
         let readme = include_str!("../README.md");
-        // The list is one quoted string per line, optionally comma-terminated.
-        let quoted = regex::Regex::new(r#"(?m)^"([^"]+)",?$"#).unwrap();
 
+        // Narrow to the fenced block under the heading. Scanning the whole
+        // file would pick up any future quoted line elsewhere in the README
+        // and fail on it even though it was never meant to be a date.
+        let after_heading = readme
+            .split_once("## Accepted date formats")
+            .expect("README lost its '## Accepted date formats' heading")
+            .1;
+        let after_fence_marker = after_heading
+            .split_once("```")
+            .expect("the accepted-formats section lost its opening code fence")
+            .1;
+        // Drop the remainder of the fence line, which carries the language tag.
+        let block_start = after_fence_marker
+            .split_once('\n')
+            .expect("the opening code fence is not terminated")
+            .1;
+        let block = block_start
+            .split_once("```")
+            .expect("the accepted-formats section lost its closing code fence")
+            .0;
+
+        // Every line in the block must be recognised as a comment or a quoted
+        // entry. A bare count would let a reformat silently drop entries while
+        // the test still passed; refusing to skip anything is what makes this
+        // a completeness check rather than a sample.
         let mut checked = 0_usize;
-        for caps in quoted.captures_iter(readme) {
-            let input = &caps[1];
+        for line in block.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("//") {
+                continue;
+            }
+            let input = line
+                .strip_suffix(',')
+                .unwrap_or(line)
+                .strip_prefix('"')
+                .and_then(|rest| rest.strip_suffix('"'))
+                .unwrap_or_else(|| {
+                    panic!("unparsable line in the accepted-formats block: {line:?}")
+                });
             // The list mixes MDY- and DMY-ordered examples, so accept either
             // preference — the README documents both under one heading.
             assert!(
@@ -326,9 +360,11 @@ mod tests {
             );
             checked += 1;
         }
+        // Backstop against the block being emptied or truncated entirely,
+        // which the per-line check above cannot see.
         assert!(
             checked >= 80,
-            "expected to check the whole README list, only found {checked} entries"
+            "expected the full accepted-formats list, only found {checked} entries"
         );
     }
 
