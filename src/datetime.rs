@@ -3,17 +3,31 @@ use crate::timezone;
 use anyhow::{Result, anyhow};
 use chrono::format::{Item, ParseResult, Parsed, parse as parse_items};
 use chrono::prelude::*;
-use regex::Regex;
 
+/// Compiles a regex literal once per process and hands each thread its own
+/// clone, as a `&'static LocalKey<Regex>` used via `.with(|re| ...)`.
+///
+/// A shared `Regex` gives only its first-using thread the lock-free cache fast
+/// path; every other thread takes a mutex-protected cache stack. Under a
+/// parallel caller (e.g. `qsv stats --infer-dates` on 16 threads) that
+/// contention nearly doubled the CPU cost of date parsing. `Regex::clone`
+/// shares the compiled program but builds a fresh cache pool, so each thread
+/// becomes the owner of its own pool. Thread-local (not leaked) so a long-lived
+/// process that churns threads doesn't accumulate caches.
 macro_rules! regex {
     ($re:literal $(,)?) => {{
         static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        RE.get_or_init(|| {
-            regex::RegexBuilder::new($re)
-                .unicode(false)
-                .build()
-                .expect("invalid regex literal")
-        })
+        thread_local! {
+            static TL: regex::Regex = RE
+                .get_or_init(|| {
+                    regex::RegexBuilder::new($re)
+                        .unicode(false)
+                        .build()
+                        .expect("invalid regex literal")
+                })
+                .clone();
+        }
+        &TL
     }};
 }
 
@@ -433,12 +447,12 @@ where
 
     #[inline]
     fn ymd_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {
+        let re = regex! {
             r"^\d{4}-\d{2}"
 
         };
 
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
         self.rfc3339(input)
@@ -450,11 +464,11 @@ where
 
     #[inline]
     fn month_mdy_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {
+        let re = regex! {
             r"^[a-zA-Z]{3,9}\.?\s+\d{1,2}"
         };
 
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
         self.month_mdy_hms(input)
@@ -464,10 +478,10 @@ where
 
     #[inline]
     fn month_dmy_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^\d{1,2}\s+[a-zA-Z]{3,9}"
+        let re = regex! {r"^\d{1,2}\s+[a-zA-Z]{3,9}"
         };
 
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
         self.month_dmy_hms(input).or_else(|| self.month_dmy(input))
@@ -475,9 +489,9 @@ where
 
     #[inline]
     fn slash_mdy_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^\d{1,2}/\d{1,2}"
+        let re = regex! {r"^\d{1,2}/\d{1,2}"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
         if self.prefer_dmy {
@@ -495,8 +509,8 @@ where
 
     #[inline]
     fn slash_ymd_family(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{4}/[0-9]{1,2}"};
-        if !re.is_match(input) {
+        let re = regex! {r"^[0-9]{4}/[0-9]{1,2}"};
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
         self.slash_ymd_hms(input).or_else(|| self.slash_ymd(input))
@@ -582,11 +596,11 @@ where
     // - 2012-03-19 10:11:59.318 PM
     #[inline]
     fn ymd_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {
+        let re = regex! {
                 r"^\d{4}-\d{2}-\d{2}[T\s]+\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?\s*(?:am|pm|AM|PM)?$"
 
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -635,17 +649,17 @@ where
         // tz group, which keeps the regex engine off the capture-tracking path.
         // See `tz_suffix` — on failure this falls through to the original
         // capture-based match, so no input can change meaning.
-        let prefix: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?"};
+        let prefix = regex! {r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?"};
         let fast_tz = prefix
-            .find(input)
+            .with(|r| r.find(input))
             .and_then(|m| tz_suffix(input, m.end(), false));
 
-        let re: &Regex = regex! {
+        let re = regex! {
                 r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
         };
 
         if let Some(tz) = fast_tz.or_else(|| {
-            re.captures(input)
+            re.with(|r| r.captures(input))
                 .and_then(|caps| caps.name("tz").map(|m| m.as_str().trim()))
         }) {
             let parse_from_str = Self::naive_dt_from_items;
@@ -667,10 +681,10 @@ where
     // - 2021-02-21
     #[inline]
     fn ymd(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}$"
+        let re = regex! {r"^\d{4}-\d{2}-\d{2}$"
         };
 
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
         let now = Utc::now()
@@ -695,9 +709,9 @@ where
         if input.len() <= 10 {
             return None;
         }
-        let re: &Regex = regex! {r"^\d{4}-\d{2}-\d{2}(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
+        let re = regex! {r"^\d{4}-\d{2}-\d{2}(?P<tz>\s*[+-:a-zA-Z0-9]{3,6})$"
         };
-        if let Some(caps) = re.captures(input)
+        if let Some(caps) = re.with(|r| r.captures(input))
             && let Some(matched_tz) = caps.name("tz")
         {
             return match timezone::parse(matched_tz.as_str().trim()) {
@@ -723,9 +737,9 @@ where
     // - 2021-Feb-21
     #[inline]
     fn month_ymd(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^\d{4}-\w{3,9}-\d{2}$"
+        let re = regex! {r"^\d{4}-\w{3,9}-\d{2}$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -748,10 +762,10 @@ where
     // - September 17, 2012, 10:10:09
     #[inline]
     fn month_mdy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {
+        let re = regex! {
                 r"^[a-zA-Z]{3,9}\.?\s+\d{1,2},\s+\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm|AM|PM)?$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -811,18 +825,18 @@ where
         // group requires whitespace (`\s+`), but the prefix's own trailing
         // `\s*` may already have consumed it, so `tz_suffix` is told to accept
         // the separator on either side of the boundary.
-        let prefix: &Regex = regex! {
+        let prefix = regex! {
                 r"^[a-zA-Z]{3,9}\s+\d{1,2},?\s+\d{4}\s*,?(?:at)?\s+\d{2}:\d{2}(?::\d{2})?\s*(?:am|pm|AM|PM)?"
         };
         let fast_tz = prefix
-            .find(input)
+            .with(|r| r.find(input))
             .and_then(|m| tz_suffix(input, m.end(), true));
 
-        let re: &Regex = regex! {
+        let re = regex! {
                 r"^[a-zA-Z]{3,9}\s+\d{1,2},?\s+\d{4}\s*,?(?:at)?\s+\d{2}:\d{2}(?::\d{2})?\s*(?:am|pm|AM|PM)?(?P<tz>\s+[+-:a-zA-Z0-9]{3,6})$",
         };
         if let Some(tz) = fast_tz.or_else(|| {
-            re.captures(input)
+            re.with(|r| r.captures(input))
                 .and_then(|caps| caps.name("tz").map(|m| m.as_str().trim()))
         }) {
             let parse_from_str = Self::naive_dt_from_items;
@@ -865,9 +879,9 @@ where
     // - October 7, 1970
     #[inline]
     fn month_mdy(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[a-zA-Z]{3,9}\.?\s+\d{1,2},\s+\d{2,4}$"
+        let re = regex! {r"^[a-zA-Z]{3,9}\.?\s+\d{1,2},\s+\d{2,4}$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -906,10 +920,10 @@ where
         if !input.as_bytes().contains(&b':') {
             return None;
         }
-        let re: &Regex = regex! {
+        let re = regex! {
                 r"^\d{1,2}\s+[a-zA-Z]{3,9}\s+\d{2,4},?\s+\d{1,2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]{1,9})?$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -945,9 +959,9 @@ where
     // - 1 July 2013
     #[inline]
     fn month_dmy(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^\d{1,2}\s+[a-zA-Z]{3,9}\s+\d{2,4}$"
+        let re = regex! {r"^\d{1,2}\s+[a-zA-Z]{3,9}\s+\d{2,4}$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -992,10 +1006,10 @@ where
     // - 03/19/2012 10:11:59.318 PM
     #[inline]
     fn slash_mdy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {
+        let re = regex! {
                 r"^\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?\s*(?:am|pm|AM|PM)?$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -1044,10 +1058,10 @@ where
     // - 19/03/2012 10:11:59.318 PM
     #[inline]
     fn slash_dmy_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {
+        let re = regex! {
                 r"^\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?\s*(?:am|pm|AM|PM)?$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -1085,9 +1099,9 @@ where
     // - 8/1/71
     #[inline]
     fn slash_mdy(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^\d{1,2}/\d{1,2}/\d{2,4}$"
+        let re = regex! {r"^\d{1,2}/\d{1,2}/\d{2,4}$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -1115,9 +1129,9 @@ where
     // - 1/8/71
     #[inline]
     fn slash_dmy(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4}$"
+        let re = regex! {r"^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4}$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -1148,10 +1162,10 @@ where
     // - 2012/03/19 10:11:59.318 PM
     #[inline]
     fn slash_ymd_hms(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {
+        let re = regex! {
                 r"^[0-9]{4}/[0-9]{1,2}/[0-9]{1,2}\s+[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]{1,9})?\s*(?:am|pm|AM|PM)?$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -1173,9 +1187,9 @@ where
     // - 2014/03/31
     #[inline]
     fn slash_ymd(&self, input: &str) -> Option<Result<DateTime<Utc>>> {
-        let re: &Regex = regex! {r"^[0-9]{4}/[0-9]{1,2}/[0-9]{1,2}$"
+        let re = regex! {r"^[0-9]{4}/[0-9]{1,2}/[0-9]{1,2}$"
         };
-        if !re.is_match(input) {
+        if !re.with(|r| r.is_match(input)) {
             return None;
         }
 
@@ -1195,6 +1209,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use regex::Regex;
 
     #[test]
     fn unix_timestamp() {
