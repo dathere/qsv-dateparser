@@ -417,10 +417,10 @@ where
     #[inline]
     pub fn parse(&self, input: &str) -> Result<DateTime<Utc>> {
         if cannot_be_date(input) {
-            return Err(anyhow!("{} did not match any formats.", input));
+            return Err(anyhow!("{input} did not match any formats."));
         }
         let Some(&first) = input.as_bytes().first() else {
-            return Err(anyhow!("{} did not match any formats.", input));
+            return Err(anyhow!("{input} did not match any formats."));
         };
 
         let parsed = if first.is_ascii_digit() {
@@ -442,7 +442,7 @@ where
             self.unix_timestamp(input).or_else(|| self.rfc2822(input))
         };
 
-        parsed.unwrap_or_else(|| Err(anyhow!("{} did not match any formats.", input)))
+        parsed.unwrap_or_else(|| Err(anyhow!("{input} did not match any formats.")))
     }
 
     #[inline]
@@ -775,12 +775,11 @@ where
         // still fail to parse after stripping because the digits run together.
         let mut buf = [0_u8; NORMALIZE_SCRATCH];
         let fallback;
-        let dt = match normalize_into(input, &mut buf, b",.", false) {
-            Some(s) => s,
-            None => {
-                fallback = input.replace([',', '.'], "");
-                fallback.as_str()
-            }
+        let dt = if let Some(s) = normalize_into(input, &mut buf, b",.", false) {
+            s
+        } else {
+            fallback = input.replace([',', '.'], "");
+            fallback.as_str()
         };
         // Classify `dt`, not `input`: the regex admits a period after an
         // abbreviated month ("Sept. 17, 2012"), which would otherwise read as
@@ -814,7 +813,7 @@ where
         }
         let bytes = input.as_bytes();
         let has_year = (0..bytes.len().saturating_sub(3)).any(|i| {
-            bytes[i..i + 4].iter().all(|b| b.is_ascii_digit())
+            bytes[i..i + 4].iter().all(u8::is_ascii_digit)
                 && (i == 0 || !bytes[i - 1].is_ascii_digit())
                 && bytes.get(i + 4).is_none_or(|b| !b.is_ascii_digit())
         });
@@ -844,16 +843,15 @@ where
                 Ok(offset) => {
                     let mut buf = [0_u8; NORMALIZE_SCRATCH];
                     let fallback;
-                    let dt: &str = match normalize_into(input, &mut buf, b",", true) {
-                        Some(s) => s,
-                        None => {
-                            let mut owned = input.replace(',', "");
-                            if let Some(pos) = owned.find("at") {
-                                owned.replace_range(pos..pos + 2, "");
-                            }
-                            fallback = owned;
-                            fallback.as_str()
+                    let dt: &str = if let Some(s) = normalize_into(input, &mut buf, b",", true) {
+                        s
+                    } else {
+                        let mut owned = input.replace(',', "");
+                        if let Some(pos) = owned.find("at") {
+                            owned.replace_range(pos..pos + 2, "");
                         }
+                        fallback = owned;
+                        fallback.as_str()
                     };
                     parse_from_str(dt, fmt_items!("%B %d %Y %H:%M:%S %Z"))
                         .or_else(|_| parse_from_str(dt, fmt_items!("%B %d %Y %H:%M %Z")))
@@ -894,12 +892,11 @@ where
         // inputs that reach this point.
         let mut buf = [0_u8; NORMALIZE_SCRATCH];
         let fallback;
-        let dt = match normalize_into(input, &mut buf, b",.", false) {
-            Some(s) => s,
-            None => {
-                fallback = input.replace([',', '.'], "");
-                fallback.as_str()
-            }
+        let dt = if let Some(s) = normalize_into(input, &mut buf, b",.", false) {
+            s
+        } else {
+            fallback = input.replace([',', '.'], "");
+            fallback.as_str()
         };
         Self::naive_date_from_items(dt, fmt_items!("%B %d %y"))
             .or_else(|_| Self::naive_date_from_items(dt, fmt_items!("%B %d %Y")))
@@ -929,12 +926,11 @@ where
 
         let mut buf = [0_u8; NORMALIZE_SCRATCH];
         let fallback;
-        let dt = match normalize_into(input, &mut buf, b",", false) {
-            Some(s) => s,
-            None => {
-                fallback = input.replace(',', "");
-                fallback.as_str()
-            }
+        let dt = if let Some(s) = normalize_into(input, &mut buf, b",", false) {
+            s
+        } else {
+            fallback = input.replace(',', "");
+            fallback.as_str()
         };
         // This family's regex has no am/pm alternative, so the AM/PM shapes
         // cannot occur here. The chain previously ended in `%I:%M:%S %P` and
@@ -974,7 +970,7 @@ where
         let bytes = input.as_bytes();
         let len = bytes.len();
         let four_digit_year = len >= 5
-            && bytes[len - 4..].iter().all(|b| b.is_ascii_digit())
+            && bytes[len - 4..].iter().all(u8::is_ascii_digit)
             && bytes[len - 5].is_ascii_whitespace();
         let parsed = if four_digit_year {
             Self::naive_date_from_items(input, fmt_items!("%d %B %Y"))
