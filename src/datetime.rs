@@ -687,15 +687,9 @@ where
         if !re.with(|r| r.is_match(input)) {
             return None;
         }
-        let now = Utc::now()
-            .date()
-            .and_time(self.default_time)?
-            .with_timezone(self.tz);
         Self::naive_date_from_items(input, fmt_items!("%Y-%m-%d"))
             .ok()
-            .map(|parsed| parsed.and_time(now.time()))
-            .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
-            .map(|at_tz| at_tz.with_timezone(&Utc))
+            .map(|parsed| Utc.from_utc_datetime(&parsed.and_time(self.default_time)))
             .map(Ok)
     }
 
@@ -715,18 +709,10 @@ where
             && let Some(matched_tz) = caps.name("tz")
         {
             return match timezone::parse(matched_tz.as_str().trim()) {
-                Ok(offset) => {
-                    let now = Utc::now()
-                        .date()
-                        .and_time(self.default_time)?
-                        .with_timezone(&offset);
-                    Self::naive_date_from_items(input, fmt_items!("%Y-%m-%d %Z"))
-                        .ok()
-                        .map(|parsed| parsed.and_time(now.time()))
-                        .and_then(|datetime| offset.from_local_datetime(&datetime).single())
-                        .map(|at_tz| at_tz.with_timezone(&Utc))
-                        .map(Ok)
-                }
+                Ok(_) => Self::naive_date_from_items(input, fmt_items!("%Y-%m-%d %Z"))
+                    .ok()
+                    .map(|parsed| Utc.from_utc_datetime(&parsed.and_time(self.default_time)))
+                    .map(Ok),
                 Err(err) => Some(Err(err)),
             };
         }
@@ -743,16 +729,10 @@ where
             return None;
         }
 
-        let now = Utc::now()
-            .date()
-            .and_time(self.default_time)?
-            .with_timezone(self.tz);
         Self::naive_date_from_items(input, fmt_items!("%Y-%m-%d"))
             .or_else(|_| Self::naive_date_from_items(input, fmt_items!("%Y-%b-%d")))
             .ok()
-            .map(|parsed| parsed.and_time(now.time()))
-            .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
-            .map(|at_tz| at_tz.with_timezone(&Utc))
+            .map(|parsed| Utc.from_utc_datetime(&parsed.and_time(self.default_time)))
             .map(Ok)
     }
 
@@ -883,10 +863,6 @@ where
             return None;
         }
 
-        let now = Utc::now()
-            .date()
-            .and_time(self.default_time)?
-            .with_timezone(self.tz);
         // The regex above enforces \s+ after any comma or period, so removing bare ',' or '.'
         // is equivalent to the previous `replace(", ", " ").replace(". ", " ")` for all
         // inputs that reach this point.
@@ -901,9 +877,7 @@ where
         Self::naive_date_from_items(dt, fmt_items!("%B %d %y"))
             .or_else(|_| Self::naive_date_from_items(dt, fmt_items!("%B %d %Y")))
             .ok()
-            .map(|parsed| parsed.and_time(now.time()))
-            .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
-            .map(|at_tz| at_tz.with_timezone(&Utc))
+            .map(|parsed| Utc.from_utc_datetime(&parsed.and_time(self.default_time)))
             .map(Ok)
     }
 
@@ -961,10 +935,6 @@ where
             return None;
         }
 
-        let now = Utc::now()
-            .date()
-            .and_time(self.default_time)?
-            .with_timezone(self.tz);
         // Fast path: if the last 4 bytes are all digits and preceded by a space, it's a
         // 4-digit year — skip the always-failing %d %B %y (2-digit year) attempt.
         let bytes = input.as_bytes();
@@ -980,9 +950,7 @@ where
         };
         parsed
             .ok()
-            .map(|parsed| parsed.and_time(now.time()))
-            .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
-            .map(|at_tz| at_tz.with_timezone(&Utc))
+            .map(|parsed| Utc.from_utc_datetime(&parsed.and_time(self.default_time)))
             .map(Ok)
     }
 
@@ -1101,10 +1069,6 @@ where
             return None;
         }
 
-        let now = Utc::now()
-            .date()
-            .and_time(self.default_time)?
-            .with_timezone(self.tz);
         let fmt = if slash_year_is_two_digits(input.as_bytes()) {
             fmt_items!("%m/%d/%y")
         } else {
@@ -1112,9 +1076,7 @@ where
         };
         Self::naive_date_from_items(input, fmt)
             .ok()
-            .map(|parsed| parsed.and_time(now.time()))
-            .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
-            .map(|at_tz| at_tz.with_timezone(&Utc))
+            .map(|parsed| Utc.from_utc_datetime(&parsed.and_time(self.default_time)))
             .map(Ok)
     }
 
@@ -1131,10 +1093,6 @@ where
             return None;
         }
 
-        let now = Utc::now()
-            .date()
-            .and_time(self.default_time)?
-            .with_timezone(self.tz);
         let fmt = if slash_year_is_two_digits(input.as_bytes()) {
             fmt_items!("%d/%m/%y")
         } else {
@@ -1142,9 +1100,7 @@ where
         };
         Self::naive_date_from_items(input, fmt)
             .ok()
-            .map(|parsed| parsed.and_time(now.time()))
-            .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
-            .map(|at_tz| at_tz.with_timezone(&Utc))
+            .map(|parsed| Utc.from_utc_datetime(&parsed.and_time(self.default_time)))
             .map(Ok)
     }
 
@@ -1189,15 +1145,9 @@ where
             return None;
         }
 
-        let now = Utc::now()
-            .date()
-            .and_time(self.default_time)?
-            .with_timezone(self.tz);
         Self::naive_date_from_items(input, fmt_items!("%Y/%m/%d"))
             .ok()
-            .map(|parsed| parsed.and_time(now.time()))
-            .and_then(|datetime| self.tz.from_local_datetime(&datetime).single())
-            .map(|at_tz| at_tz.with_timezone(&Utc))
+            .map(|parsed| Utc.from_utc_datetime(&parsed.and_time(self.default_time)))
             .map(Ok)
     }
 }
@@ -1462,30 +1412,21 @@ mod tests {
     #[test]
     fn ymd_z() {
         let parse = Parse::new(&Utc, Utc::now().time());
-        let now_at_pst = Utc::now().with_timezone(&FixedOffset::west(8 * 3600));
-        let now_at_cst = Utc::now().with_timezone(&FixedOffset::east(8 * 3600));
 
+        // A date-only input is the written date at the current UTC time; its
+        // zone doesn't move it to another day.
         let test_cases = [
             (
                 "2021-02-21 PST",
-                FixedOffset::west(8 * 3600)
-                    .ymd(2021, 2, 21)
-                    .and_time(now_at_pst.time())
-                    .map(|dt| dt.with_timezone(&Utc)),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()),
             ),
             (
                 "2021-02-21 UTC",
-                FixedOffset::west(0)
-                    .ymd(2021, 2, 21)
-                    .and_time(Utc::now().time())
-                    .map(|dt| dt.with_timezone(&Utc)),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()),
             ),
             (
                 "2020-07-20+08:00",
-                FixedOffset::east(8 * 3600)
-                    .ymd(2020, 7, 20)
-                    .and_time(now_at_cst.time())
-                    .map(|dt| dt.with_timezone(&Utc)),
+                Utc.ymd(2020, 7, 20).and_time(Utc::now().time()),
             ),
         ];
 
@@ -2083,6 +2024,64 @@ mod tests {
                 parse.parse(input).is_err(),
                 "{input} is expected to remain unsupported"
             );
+        }
+    }
+
+    /// A date-only input is the written date at `default_time` in UTC, whatever the
+    /// timezone and whatever today's date. It used to take its time of day from
+    /// `default_time` converted into the timezone *today*, then re-attach that wall-clock
+    /// time to the written date. That shifted the result whenever today's offset differed
+    /// from the written date's (Athens in July, checked after the October DST change),
+    /// and whenever the conversion crossed midnight: with `default_time` at midnight, every
+    /// zone west of UTC landed on the next day, all year.
+    #[test]
+    fn date_only_is_the_written_date_at_default_time_utc() {
+        use chrono_tz::{America::Los_Angeles, Europe::Athens, Pacific::Auckland};
+
+        // (input, dmy preference) — one per date-only parser
+        let inputs = [
+            ("2005-07-04", false),     // ymd
+            ("2005-07-04 PST", false), // ymd_z
+            ("2005-Jul-04", false),    // month_ymd
+            ("July 4, 2005", false),   // month_mdy
+            ("4 July 2005", false),    // month_dmy
+            ("07/04/2005", false),     // slash_mdy
+            ("04/07/2005", true),      // slash_dmy
+            ("2005/07/04", false),     // slash_ymd
+        ];
+        let times = [
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            NaiveTime::from_hms_opt(23, 30, 0).unwrap(),
+        ];
+
+        fn check<Tz2: TimeZone>(tz: &Tz2, name: &str, inputs: &[(&str, bool)], t: NaiveTime) {
+            let want =
+                Utc.from_utc_datetime(&NaiveDate::from_ymd_opt(2005, 7, 4).unwrap().and_time(t));
+            for &(input, dmy) in inputs {
+                let got = Parse::new_with_preference(tz, t, dmy)
+                    .parse(input)
+                    .unwrap_or_else(|e| panic!("{input} in {name}: {e}"));
+                assert_eq!(got, want, "{input} in {name} at {t}");
+            }
+        }
+
+        for t in times {
+            check(&Utc, "UTC", &inputs, t);
+            check(
+                &FixedOffset::west_opt(8 * 3600).unwrap(),
+                "UTC-8",
+                &inputs,
+                t,
+            );
+            check(
+                &FixedOffset::east_opt(3 * 3600).unwrap(),
+                "UTC+3",
+                &inputs,
+                t,
+            );
+            check(&Los_Angeles, "America/Los_Angeles", &inputs, t);
+            check(&Athens, "Europe/Athens", &inputs, t);
+            check(&Auckland, "Pacific/Auckland", &inputs, t);
         }
     }
 }

@@ -407,35 +407,19 @@ mod tests {
             (
                 "ymd",
                 "2021-02-21",
-                Local
-                    .ymd(2021, 2, 21)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
                 "ymd_z",
                 "2021-02-21 PST",
-                FixedOffset::west(8 * 3600)
-                    .ymd(2021, 2, 21)
-                    .and_time(
-                        Utc::now()
-                            .with_timezone(&FixedOffset::west(8 * 3600))
-                            .time(),
-                    )
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
                 "month_ymd",
                 "2021-Feb-21",
-                Local
-                    .ymd(2021, 2, 21)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -456,11 +440,7 @@ mod tests {
             (
                 "month_mdy",
                 "May 25, 2021",
-                Local
-                    .ymd(2021, 5, 25)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 5, 25).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -475,11 +455,7 @@ mod tests {
             (
                 "month_dmy",
                 "1 July 2013",
-                Local
-                    .ymd(2013, 7, 1)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2013, 7, 1).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -494,11 +470,7 @@ mod tests {
             (
                 "slash_mdy",
                 "08/21/71",
-                Local
-                    .ymd(1971, 8, 21)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(1971, 8, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -513,11 +485,7 @@ mod tests {
             (
                 "slash_ymd",
                 "2014/3/31",
-                Local
-                    .ymd(2014, 3, 31)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2014, 3, 31).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
         ];
@@ -584,15 +552,7 @@ mod tests {
             (
                 "ymd_z",
                 "2021-02-21 PST",
-                FixedOffset::west(8 * 3600)
-                    .ymd(2021, 2, 21)
-                    .and_time(
-                        Utc::now()
-                            .with_timezone(&FixedOffset::west(8 * 3600))
-                            .time(),
-                    )
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -832,16 +792,11 @@ mod tests {
 
     #[test]
     fn parse_unambiguous_dmy() {
-        // `parse()` uses Local timezone and pads date-only inputs with the
-        // current time of day, so the resulting UTC date can roll by ±1 day
-        // depending on host TZ and the moment the test runs. Assert on the
-        // Local date — that's what `parse()` actually models for this input.
+        // A date-only input keeps its written date as the UTC date, whatever the
+        // host TZ or the moment the test runs.
         assert_eq!(
-            super::parse("31/3/22")
-                .unwrap()
-                .with_timezone(&Local)
-                .date(),
-            Local.ymd(2022, 3, 31)
+            super::parse("31/3/22").unwrap().date(),
+            Utc.ymd(2022, 3, 31)
         );
         assert_eq!(
             super::parse_with_preference("3/31/22", true)
