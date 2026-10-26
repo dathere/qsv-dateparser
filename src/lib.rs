@@ -243,6 +243,9 @@ const MIDNIGHT: NaiveTime = NaiveTime::MIN;
 /// When timezone is not provided, this function assumes it's a [`chrono::Local`] datetime. For
 /// custom timezone, use [`parse_with_timezone()`] instead.If all options are exhausted,
 /// [`parse()`] will return an error to let the caller know that no formats were matched.
+///
+/// A date-only input (no time of day, e.g. `2021-02-21`) is the written date at the current
+/// UTC time: its UTC date is always the written date, and the timezone is not applied to it.
 #[inline]
 pub fn parse(input: &str) -> Result<DateTime<Utc>> {
     Parse::new(&Local, Utc::now().time()).parse(input)
@@ -260,6 +263,8 @@ pub fn parse_with_preference(input: &str, dmy_preference: bool) -> Result<DateTi
 /// and tries to parse the datetime string. When timezone is not given in the string, this function
 /// will assume and parse the datetime by the custom timezone provided in this function's arguments.
 ///
+/// A date-only input (no time of day) is the written date at the current UTC time; `tz` and
+/// any offset in the input apply only to inputs with a time of day.
 #[inline]
 pub fn parse_with_timezone<Tz2: TimeZone>(input: &str, tz: &Tz2) -> Result<DateTime<Utc>> {
     Parse::new(tz, Utc::now().time()).parse(input)
@@ -270,6 +275,9 @@ pub fn parse_with_timezone<Tz2: TimeZone>(input: &str, tz: &Tz2) -> Result<DateT
 /// assume and parse the datetime by the custom timezone provided in this function's arguments.
 /// When `dmy_preference` is `true`, it will parse strings using the DMY format. Otherwise, it
 /// parses them using an MDY format.
+///
+/// A date-only input (no time of day) is midnight UTC on the written date; `tz` and any offset
+/// in the input apply only to inputs with a time of day.
 #[inline]
 pub fn parse_with_preference_and_timezone<Tz2: TimeZone>(
     input: &str,
@@ -284,6 +292,9 @@ pub fn parse_with_preference_and_timezone<Tz2: TimeZone>(
 /// it's not given in datetime string, this function also use provided default naive time in parsed
 /// [`chrono::DateTime`].
 ///
+/// `default_time` is a UTC time: a date-only input (no time of day) is the written date at
+/// `default_time` in UTC, and `tz` and any offset in the input apply only to inputs with a
+/// time of day.
 #[inline]
 pub fn parse_with<Tz2: TimeZone>(
     input: &str,

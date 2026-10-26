@@ -324,6 +324,9 @@ where
 {
     /// Create a new instance of [`Parse`] with a custom parsing timezone that handles the
     /// datetime string without time offset.
+    ///
+    /// `default_time` is a UTC time: a date-only input (no time of day) parses to the written
+    /// date at `default_time` in UTC, and `tz` is not applied to it.
     pub const fn new(tz: &'z Tz2, default_time: NaiveTime) -> Self {
         Self {
             tz,
@@ -339,6 +342,9 @@ where
 
     /// Create a new instance of [`Parse`] with a custom parsing timezone that handles the
     /// datetime string without time offset, and the date parsing preference.
+    ///
+    /// `default_time` is a UTC time: a date-only input (no time of day) parses to the written
+    /// date at `default_time` in UTC, and `tz` is not applied to it.
     pub const fn new_with_preference(
         tz: &'z Tz2,
         default_time: NaiveTime,
