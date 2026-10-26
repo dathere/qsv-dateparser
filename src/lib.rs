@@ -243,6 +243,9 @@ const MIDNIGHT: NaiveTime = NaiveTime::MIN;
 /// When timezone is not provided, this function assumes it's a [`chrono::Local`] datetime. For
 /// custom timezone, use [`parse_with_timezone()`] instead.If all options are exhausted,
 /// [`parse()`] will return an error to let the caller know that no formats were matched.
+///
+/// A date-only input (no time of day, e.g. `2021-02-21`) is the written date at the current
+/// UTC time: its UTC date is always the written date, and the timezone is not applied to it.
 #[inline]
 pub fn parse(input: &str) -> Result<DateTime<Utc>> {
     Parse::new(&Local, Utc::now().time()).parse(input)
@@ -260,6 +263,8 @@ pub fn parse_with_preference(input: &str, dmy_preference: bool) -> Result<DateTi
 /// and tries to parse the datetime string. When timezone is not given in the string, this function
 /// will assume and parse the datetime by the custom timezone provided in this function's arguments.
 ///
+/// A date-only input (no time of day) is the written date at the current UTC time; `tz` and
+/// any offset in the input apply only to inputs with a time of day.
 #[inline]
 pub fn parse_with_timezone<Tz2: TimeZone>(input: &str, tz: &Tz2) -> Result<DateTime<Utc>> {
     Parse::new(tz, Utc::now().time()).parse(input)
@@ -270,6 +275,9 @@ pub fn parse_with_timezone<Tz2: TimeZone>(input: &str, tz: &Tz2) -> Result<DateT
 /// assume and parse the datetime by the custom timezone provided in this function's arguments.
 /// When `dmy_preference` is `true`, it will parse strings using the DMY format. Otherwise, it
 /// parses them using an MDY format.
+///
+/// A date-only input (no time of day) is midnight UTC on the written date; `tz` and any offset
+/// in the input apply only to inputs with a time of day.
 #[inline]
 pub fn parse_with_preference_and_timezone<Tz2: TimeZone>(
     input: &str,
@@ -284,6 +292,9 @@ pub fn parse_with_preference_and_timezone<Tz2: TimeZone>(
 /// it's not given in datetime string, this function also use provided default naive time in parsed
 /// [`chrono::DateTime`].
 ///
+/// `default_time` is a UTC time: a date-only input (no time of day) is the written date at
+/// `default_time` in UTC, and `tz` and any offset in the input apply only to inputs with a
+/// time of day.
 #[inline]
 pub fn parse_with<Tz2: TimeZone>(
     input: &str,
@@ -407,35 +418,19 @@ mod tests {
             (
                 "ymd",
                 "2021-02-21",
-                Local
-                    .ymd(2021, 2, 21)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
                 "ymd_z",
                 "2021-02-21 PST",
-                FixedOffset::west(8 * 3600)
-                    .ymd(2021, 2, 21)
-                    .and_time(
-                        Utc::now()
-                            .with_timezone(&FixedOffset::west(8 * 3600))
-                            .time(),
-                    )
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
                 "month_ymd",
                 "2021-Feb-21",
-                Local
-                    .ymd(2021, 2, 21)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -456,11 +451,7 @@ mod tests {
             (
                 "month_mdy",
                 "May 25, 2021",
-                Local
-                    .ymd(2021, 5, 25)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 5, 25).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -475,11 +466,7 @@ mod tests {
             (
                 "month_dmy",
                 "1 July 2013",
-                Local
-                    .ymd(2013, 7, 1)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2013, 7, 1).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -494,11 +481,7 @@ mod tests {
             (
                 "slash_mdy",
                 "08/21/71",
-                Local
-                    .ymd(1971, 8, 21)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(1971, 8, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -513,11 +496,7 @@ mod tests {
             (
                 "slash_ymd",
                 "2014/3/31",
-                Local
-                    .ymd(2014, 3, 31)
-                    .and_time(Local::now().time())
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2014, 3, 31).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
         ];
@@ -584,15 +563,7 @@ mod tests {
             (
                 "ymd_z",
                 "2021-02-21 PST",
-                FixedOffset::west(8 * 3600)
-                    .ymd(2021, 2, 21)
-                    .and_time(
-                        Utc::now()
-                            .with_timezone(&FixedOffset::west(8 * 3600))
-                            .time(),
-                    )
-                    .unwrap()
-                    .with_timezone(&Utc),
+                Utc.ymd(2021, 2, 21).and_time(Utc::now().time()).unwrap(),
                 Trunc::Seconds,
             ),
             (
@@ -832,16 +803,11 @@ mod tests {
 
     #[test]
     fn parse_unambiguous_dmy() {
-        // `parse()` uses Local timezone and pads date-only inputs with the
-        // current time of day, so the resulting UTC date can roll by ±1 day
-        // depending on host TZ and the moment the test runs. Assert on the
-        // Local date — that's what `parse()` actually models for this input.
+        // A date-only input keeps its written date as the UTC date, whatever the
+        // host TZ or the moment the test runs.
         assert_eq!(
-            super::parse("31/3/22")
-                .unwrap()
-                .with_timezone(&Local)
-                .date(),
-            Local.ymd(2022, 3, 31)
+            super::parse("31/3/22").unwrap().date(),
+            Utc.ymd(2022, 3, 31)
         );
         assert_eq!(
             super::parse_with_preference("3/31/22", true)
